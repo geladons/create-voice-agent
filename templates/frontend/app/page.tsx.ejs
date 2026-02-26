@@ -1,0 +1,90 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  LiveKitRoom,
+  RoomAudioRenderer,
+  useVoiceAssistant,
+  BarVisualizer,
+  DisconnectButton,
+} from "@livekit/components-react";
+import "@livekit/components-styles";
+
+function VoiceAssistantUI() {
+  const { state, audioTrack } = useVoiceAssistant();
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "1rem",
+        padding: "2rem",
+      }}
+    >
+      <h2>Agent Status: {state}</h2>
+      <BarVisualizer
+        state={state}
+        barCount={5}
+        trackRef={audioTrack}
+        style={{ width: "300px", height: "80px" }}
+      />
+      <DisconnectButton>Disconnect</DisconnectButton>
+    </div>
+  );
+}
+
+export default function Home() {
+  const [token, setToken] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880";
+
+  useEffect(() => {
+    async function fetchToken() {
+      try {
+        const res = await fetch("/api/token?room=voice-room&username=user");
+        if (!res.ok) throw new Error("Failed to fetch token");
+        const data = await res.json();
+        setToken(data.token);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+      }
+    }
+    fetchToken();
+  }, []);
+
+  if (error) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <h1>Error</h1>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  if (!token) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <p>Connecting to voice agent...</p>
+      </div>
+    );
+  }
+
+  return (
+    <main style={{ padding: "2rem", textAlign: "center" }}>
+      <h1><%= projectName %></h1>
+      <LiveKitRoom
+        serverUrl={livekitUrl}
+        token={token}
+        connect={true}
+        audio={true}
+      >
+        <VoiceAssistantUI />
+        <RoomAudioRenderer />
+      </LiveKitRoom>
+    </main>
+  );
+}
+

@@ -1,0 +1,60 @@
+# <%= projectName %>
+
+A real-time Voice AI Agent powered by [LiveKit](https://livekit.io/), Python, and Docker.
+
+## Architecture
+
+- **LiveKit Server** — WebRTC media server (SFU)
+- **Redis** — Required by LiveKit for signaling
+- **Python Agent** — Voice pipeline using `livekit-agents` (VAD → STT → LLM → TTS)
+<% if (includeFrontend) { -%>
+- **Next.js Frontend** — Browser UI with LiveKit Room components
+<% } -%>
+
+## Quick Start
+
+```bash
+# 1. Copy and configure environment variables
+cp .env.example .env
+# Edit .env with your API keys
+
+# 2. Start all services
+docker compose up --build
+```
+
+<% if (llmProvider === 'ollama') { -%>
+### Ollama (Local LLM)
+
+Make sure Ollama is running on your host machine:
+
+```bash
+ollama serve
+ollama pull llama3.1
+```
+
+The agent connects to Ollama via `http://host.docker.internal:11434`.
+<% } else { -%>
+### OpenAI
+
+Set your `OPENAI_API_KEY` in the `.env` file.
+<% } -%>
+
+<% if (includeFrontend) { -%>
+## Frontend
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+The frontend fetches a LiveKit access token from `/api/token` and connects to the voice agent.
+<% } -%>
+
+## Services & Ports
+
+| Service    | Port  | Protocol |
+| ---------- | ----- | -------- |
+| LiveKit    | 7880  | HTTP/WS  |
+| LiveKit    | 7881  | RTC TCP  |
+| LiveKit    | 50000-50050 | UDP |
+| Redis      | 6379  | TCP      |
+<% if (includeFrontend) { -%>
+| Frontend   | 3000  | HTTP     |
+<% } -%>
+

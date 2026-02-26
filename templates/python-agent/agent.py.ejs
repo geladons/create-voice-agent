@@ -1,0 +1,58 @@
+"""
+<%= projectName %> — Voice AI Agent
+Uses the official livekit-agents library with VoicePipelineAgent.
+"""
+
+import os
+import logging
+
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit.agents.pipeline import VoicePipelineAgent
+from livekit.plugins import deepgram, silero
+<% if (llmProvider === 'openai') { -%>
+from livekit.plugins import openai as openai_plugin
+<% } else { -%>
+from livekit.plugins import openai as openai_plugin
+<% } -%>
+
+logger = logging.getLogger("voice-agent")
+logger.setLevel(logging.INFO)
+
+
+async def entrypoint(ctx: JobContext):
+    """Called when a participant joins the LiveKit room."""
+
+    logger.info(f"Connecting to room: {ctx.room.name}")
+    await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
+    participant = await ctx.wait_for_participant()
+    logger.info(f"Participant joined: {participant.identity}")
+
+    # ─── Build the Voice Pipeline ────────────────────────────────────
+<% if (llmProvider === 'openai') { -%>
+    llm = openai_plugin.LLM(model="gpt-4o-mini")
+    tts = openai_plugin.TTS(voice="alloy")
+<% } else { -%>
+    llm = openai_plugin.LLM.with_ollama(
+        model="llama3.1",
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+    )
+    tts = openai_plugin.TTS(voice="alloy")
+<% } -%>
+
+    agent = VoicePipelineAgent(
+        vad=silero.VAD.load(),
+        stt=deepgram.STT(),
+        llm=llm,
+        tts=tts,
+    )
+
+    # Start the agent in the room
+    agent.start(ctx.room, participant)
+
+    await agent.say("Hello! I'm your voice assistant. How can I help you today?")
+
+
+if __name__ == "__main__":
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+

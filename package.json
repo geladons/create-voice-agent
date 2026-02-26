@@ -1,0 +1,34 @@
+{
+  "name": "create-voice-agent",
+  "version": "1.0.0",
+  "description": "CLI to scaffold production-ready, containerized Voice AI Agents using LiveKit, Python, and Docker",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "create-voice-agent": "./bin/create-voice-agent.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "livekit",
+    "voice-agent",
+    "webrtc",
+    "docker",
+    "cli",
+    "scaffold",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "files": [
+    "bin/",
+    "src/",
+    "templates/"
+  ],
+  "dependencies": {
+    "@inquirer/prompts": "^8.3.0",
+    "commander": "^14.0.3",
+    "ejs": "^4.0.1"
+  }
+}

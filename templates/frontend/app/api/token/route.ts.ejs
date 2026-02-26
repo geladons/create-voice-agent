@@ -1,0 +1,33 @@
+import { AccessToken } from "livekit-server-sdk";
+import { NextRequest, NextResponse } from "next/server";
+
+export async function GET(req: NextRequest) {
+  const room = req.nextUrl.searchParams.get("room") ?? "default-room";
+  const username = req.nextUrl.searchParams.get("username") ?? `user-${Math.floor(Math.random() * 10000)}`;
+
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    return NextResponse.json(
+      { error: "LIVEKIT_API_KEY and LIVEKIT_API_SECRET must be set" },
+      { status: 500 }
+    );
+  }
+
+  const at = new AccessToken(apiKey, apiSecret, {
+    identity: username,
+  });
+
+  at.addGrant({
+    room,
+    roomJoin: true,
+    canPublish: true,
+    canSubscribe: true,
+  });
+
+  const token = await at.toJwt();
+
+  return NextResponse.json({ token });
+}
+

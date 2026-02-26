@@ -1,0 +1,76 @@
+version: "3.9"
+
+services:
+  # ─── Redis (required by LiveKit) ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── LiveKit Server ────────────────────────────────────────────────
+  livekit:
+    image: livekit/livekit-server:latest
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "7880:7880"       # HTTP / WebSocket
+      - "7881:7881"       # RTC TCP
+      - "50000-50050:50000-50050/udp"   # WebRTC UDP (strictly limited range)
+    environment:
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY}:${LIVEKIT_API_SECRET}
+    command: >
+      --config /etc/livekit.yaml
+      --bind 0.0.0.0
+      --redis-host redis:6379
+      --rtc.port-range-start 50000
+      --rtc.port-range-end 50050
+      --rtc.tcp-port 7881
+
+  # ─── Python Voice Agent ────────────────────────────────────────────
+  agent:
+    build:
+      context: ./python-agent
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - livekit
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+<% if (llmProvider === 'ollama') { -%>
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+<% } else { -%>
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+<% } -%>
+<% if (llmProvider === 'ollama') { -%>
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+<% } -%>
+
+<% if (includeFrontend) { -%>
+  # ─── Next.js Frontend ─────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - livekit
+    ports:
+      - "3000:3000"
+    environment:
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_URL=ws://livekit:7880
+      - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
+<% } -%>
+
