@@ -43,9 +43,13 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const defaultUrl = `${protocol}//${window.location.hostname}:7880`;
-      setServerUrl(process.env.NEXT_PUBLIC_LIVEKIT_URL || defaultUrl);
+      let envUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+      // Aggressively override if the baked-in variable is empty, localhost, or 127.0.0.1
+      if (!envUrl || envUrl.includes("127.0.0.1") || envUrl.includes("localhost")) {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        envUrl = `${protocol}//${window.location.hostname}:7880`;
+      }
+      setServerUrl(envUrl);
     }
   }, []);
 
