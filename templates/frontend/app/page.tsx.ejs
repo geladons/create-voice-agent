@@ -38,8 +38,16 @@ function VoiceAssistantUI() {
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [serverUrl, setServerUrl] = useState("");
 
-  const livekitUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL ?? "ws://localhost:7880";
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const defaultUrl = `${protocol}//${window.location.hostname}:7880`;
+      setServerUrl(process.env.NEXT_PUBLIC_LIVEKIT_URL || defaultUrl);
+    }
+  }, []);
 
   useEffect(() => {
     async function fetchToken() {
@@ -75,16 +83,29 @@ export default function Home() {
   return (
     <main style={{ padding: "2rem", textAlign: "center" }}>
       <h1><%= projectName %></h1>
-      <LiveKitRoom
-        serverUrl={livekitUrl}
-        token={token}
-        connect={true}
-        audio={true}
-      >
-        <VoiceAssistantUI />
-        <RoomAudioRenderer />
-      </LiveKitRoom>
+      {!connected && (
+        <button
+          type="button"
+          onClick={() => setConnected(true)}
+          disabled={!serverUrl}
+          style={{ padding: "0.75rem 1.25rem", marginBottom: "1rem" }}
+        >
+          Start Conversation
+        </button>
+      )}
+      {serverUrl ? (
+        <LiveKitRoom
+          serverUrl={serverUrl}
+          token={token}
+          connect={connected}
+          audio={true}
+        >
+          <VoiceAssistantUI />
+          <RoomAudioRenderer />
+        </LiveKitRoom>
+      ) : (
+        <p>Detecting LiveKit server URL...</p>
+      )}
     </main>
   );
 }
-
