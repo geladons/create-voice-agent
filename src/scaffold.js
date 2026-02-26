@@ -42,7 +42,15 @@ function renderDir(srcDir, destDir, data) {
 /**
  * Main scaffolding function.
  */
-export async function scaffold({ projectName, llmProvider, includeFrontend }) {
+export async function scaffold({
+  projectName,
+  llmProvider,
+  includeFrontend,
+  deploymentType = null,
+  modelName = 'qwen3-vl:2b',
+  language = 'en',
+  ollamaIp = 'localhost',
+}) {
   const projectDir = path.resolve(process.cwd(), projectName);
 
   if (fs.existsSync(projectDir)) {
@@ -52,7 +60,15 @@ export async function scaffold({ projectName, llmProvider, includeFrontend }) {
 
   fs.mkdirSync(projectDir, { recursive: true });
 
-  const data = { projectName, llmProvider, includeFrontend };
+  const data = {
+    projectName,
+    llmProvider,
+    includeFrontend,
+    deploymentType,
+    modelName,
+    language,
+    ollamaIp,
+  };
 
   // Render root-level templates
   const rootTemplates = ['docker-compose.yml.ejs', '.env.example.ejs', 'README.md.ejs'];

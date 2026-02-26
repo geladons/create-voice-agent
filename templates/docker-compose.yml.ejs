@@ -1,6 +1,21 @@
 version: "3.9"
 
 services:
+<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+  # ─── Ollama (Standalone) ─────────────────────────────────────────
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: '10'
+
+<% } -%>
   # ─── Redis (required by LiveKit) ───────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -42,16 +57,21 @@ services:
     restart: unless-stopped
     depends_on:
       - livekit
+<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+      - ollama
+<% } -%>
     environment:
       - LIVEKIT_URL=ws://livekit:7880
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-<% if (llmProvider === 'ollama') { -%>
+<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+      - OLLAMA_BASE_URL=http://ollama:11434
+<% } else if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
 <% } else { -%>
       - OPENAI_API_KEY=${OPENAI_API_KEY}
 <% } -%>
-<% if (llmProvider === 'ollama') { -%>
+<% if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
     extra_hosts:
       - "host.docker.internal:host-gateway"
 <% } -%>
@@ -74,3 +94,7 @@ services:
       - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
 <% } -%>
 
+<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+volumes:
+  ollama_data:
+<% } -%>

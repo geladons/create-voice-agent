@@ -37,12 +37,13 @@ async def entrypoint(ctx: JobContext):
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
+    # Model: <%= modelName %> | Language: <%= language %>
     llm = openai_plugin.LLM.with_ollama(
-        model="llama3.1",
+        model="<%= modelName %>",
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
     )
     tts_engine = PiperTTSPlugin(model="/app/models/en_US-lessac-medium.onnx")
-    stt_engine = FasterWhisperSTT(model="base", language="en")
+    stt_engine = FasterWhisperSTT(model="base", language="<%= language %>")
 <% } -%>
 
     agent = VoicePipelineAgent(
