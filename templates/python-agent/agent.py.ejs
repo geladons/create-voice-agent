@@ -8,11 +8,14 @@ import logging
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, silero
+from livekit.plugins import silero
 <% if (llmProvider === 'openai') { -%>
+from livekit.plugins import deepgram
 from livekit.plugins import openai as openai_plugin
 <% } else { -%>
 from livekit.plugins import openai as openai_plugin
+from custom_stt.faster_whisper_stt import FasterWhisperSTT
+from custom_tts.piper_tts import PiperTTSPlugin
 <% } -%>
 
 logger = logging.getLogger("voice-agent")
@@ -31,20 +34,22 @@ async def entrypoint(ctx: JobContext):
     # ─── Build the Voice Pipeline ────────────────────────────────────
 <% if (llmProvider === 'openai') { -%>
     llm = openai_plugin.LLM(model="gpt-4o-mini")
-    tts = openai_plugin.TTS(voice="alloy")
+    tts_engine = openai_plugin.TTS(voice="alloy")
+    stt_engine = deepgram.STT()
 <% } else { -%>
     llm = openai_plugin.LLM.with_ollama(
         model="llama3.1",
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
     )
-    tts = openai_plugin.TTS(voice="alloy")
+    tts_engine = PiperTTSPlugin(model="/app/models/en_US-lessac-medium.onnx")
+    stt_engine = FasterWhisperSTT(model="base", language="en")
 <% } -%>
 
     agent = VoicePipelineAgent(
         vad=silero.VAD.load(),
-        stt=deepgram.STT(),
+        stt=stt_engine,
         llm=llm,
-        tts=tts,
+        tts=tts_engine,
     )
 
     # Start the agent in the room
@@ -55,4 +60,3 @@ async def entrypoint(ctx: JobContext):
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
-

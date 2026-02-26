@@ -8,6 +8,11 @@ const __dirname = path.dirname(__filename);
 const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
 
 /**
+ * Directories that should only be included for the local/ollama path.
+ */
+const LOCAL_ONLY_DIRS = ['custom_tts', 'custom_stt'];
+
+/**
  * Recursively render all .ejs templates from a source directory into a target directory.
  */
 function renderDir(srcDir, destDir, data) {
@@ -15,6 +20,10 @@ function renderDir(srcDir, destDir, data) {
   for (const entry of entries) {
     const srcPath = path.join(srcDir, entry.name);
     if (entry.isDirectory()) {
+      // Skip local-only directories when using cloud provider
+      if (LOCAL_ONLY_DIRS.includes(entry.name) && data.llmProvider !== 'ollama') {
+        continue;
+      }
       const childDest = path.join(destDir, entry.name);
       fs.mkdirSync(childDest, { recursive: true });
       renderDir(srcPath, childDest, data);

@@ -1,9 +1,11 @@
 livekit-agents>=0.12.0
 livekit-plugins-silero>=0.7.0
+livekit-plugins-openai>=0.10.0
 <% if (llmProvider === 'openai') { -%>
-livekit-plugins-openai>=0.10.0
-<% } else { -%>
-livekit-plugins-openai>=0.10.0
-<% } -%>
 livekit-plugins-deepgram>=0.7.0
-
+<% } else { -%>
+piper-tts>=1.3.0
+faster-whisper>=1.0.0
+numpy
+onnxruntime>=1.22.0
+<% } -%>

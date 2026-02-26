@@ -39,7 +39,12 @@ program
     console.log(`Next steps:`);
     console.log(`  cd ${projectName}`);
     console.log(`  cp .env.example .env`);
-    console.log(`  # Fill in your API keys in .env`);
+    if (llmProvider === 'openai') {
+      console.log(`  # Fill in your API keys in .env`);
+    } else {
+      console.log(`  # Make sure Ollama is running on your host machine`);
+      console.log(`  # No external API keys required — 100% local!`);
+    }
     console.log(`  docker compose up --build\n`);
   });
 

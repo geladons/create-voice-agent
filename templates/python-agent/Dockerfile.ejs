@@ -4,9 +4,22 @@ WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && \
+<% if (llmProvider === 'ollama') { -%>
+    apt-get install -y --no-install-recommends gcc ffmpeg libsndfile1-dev curl && \
+<% } else { -%>
     apt-get install -y --no-install-recommends gcc && \
+<% } -%>
     rm -rf /var/lib/apt/lists/*
 
+<% if (llmProvider === 'ollama') { -%>
+# Download Piper TTS voice model (en_US-lessac-medium)
+RUN mkdir -p /app/models && \
+    curl -L -o /app/models/en_US-lessac-medium.onnx \
+      "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" && \
+    curl -L -o /app/models/en_US-lessac-medium.onnx.json \
+      "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json"
+
+<% } -%>
 # Copy and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -20,4 +33,3 @@ RUN useradd -m agentuser && \
 USER agentuser
 
 CMD ["python", "agent.py", "start"]
-
