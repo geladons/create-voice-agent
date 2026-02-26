@@ -36,6 +36,38 @@ async function promptModelName(models, defaultModel) {
   return input({ message: 'Enter Ollama model name:', default: defaultModel });
 }
 
+// ─── Docker Pre-Flight Check ──────────────────────────────────────────
+function checkDocker() {
+  try {
+    execSync('docker --version', { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureDocker() {
+  if (checkDocker()) return true;
+
+  const shouldInstall = await confirm({
+    message:
+      '⚠️  Docker is not installed. Would you like to attempt to install it automatically?\n   (Uses official get.docker.com script, may require sudo password)',
+    default: true,
+  });
+
+  if (!shouldInstall) return false;
+
+  console.log('\n📦 Installing Docker via get.docker.com...\n');
+  try {
+    execSync('curl -fsSL https://get.docker.com | sh', { stdio: 'inherit' });
+  } catch (err) {
+    console.error('\n⚠️  Docker installation failed:', err.message);
+    return false;
+  }
+
+  return checkDocker();
+}
+
 // ─── Docker Auto-Start ────────────────────────────────────────────────
 function autoStartDocker(projectName, deploymentType, modelName) {
   const cwd = projectName;
@@ -290,7 +322,13 @@ program
     console.log(`\n✅ Project "${projectName}" created successfully!\n`);
 
     if (shouldAutoStart) {
-      autoStartDocker(projectName, deploymentType, modelName);
+      const dockerReady = await ensureDocker();
+      if (dockerReady) {
+        autoStartDocker(projectName, deploymentType, modelName);
+      } else {
+        console.log('⚠️  Auto-start skipped. Please install Docker manually and run:');
+        console.log(`  cd ${projectName} && docker compose up --build\n`);
+      }
     } else {
       console.log('Next steps:');
       console.log(`  cd ${projectName}`);
