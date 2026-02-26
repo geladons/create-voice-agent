@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ejs from 'ejs';
+import os from 'node:os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,6 +61,8 @@ export async function scaffold({
 
   fs.mkdirSync(projectDir, { recursive: true });
 
+  const cpuLimit = Math.min(10, os.cpus().length);
+
   const data = {
     projectName,
     llmProvider,
@@ -68,6 +71,7 @@ export async function scaffold({
     modelName,
     language,
     ollamaIp,
+    cpuLimit,
   };
 
   // Render root-level templates
