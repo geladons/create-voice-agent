@@ -23,7 +23,7 @@ class PiperTTSPlugin(tts.TTS):
             sample_rate=22050,
             num_channels=1,
         )
-        self.model = model
+        self._tts_model_path = model
         self.speed = speed
         self.volume = volume
         self.noise_scale = noise_scale
@@ -33,8 +33,8 @@ class PiperTTSPlugin(tts.TTS):
         self._load_voice()
 
     def _load_voice(self):
-        logger.info(f"Loading Piper voice model: {self.model}")
-        self._voice = PiperVoice.load(self.model, use_cuda=self.use_cuda)
+        logger.info(f"Loading Piper voice model: {self._tts_model_path}")
+        self._voice = PiperVoice.load(self._tts_model_path, use_cuda=self.use_cuda)
         logger.info("Piper voice model loaded successfully")
 
     def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
@@ -101,4 +101,3 @@ class PiperStream(tts.ChunkedStream):
                 audio_data = audio.tobytes()
             chunks.append(audio_data)
         return chunks
-
