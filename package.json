@@ -1,6 +1,6 @@
 {
   "name": "create-local-voice-agent",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "CLI to scaffold production-ready, containerized Voice AI Agents using LiveKit, Python, and Docker",
   "type": "module",
   "main": "src/index.js",

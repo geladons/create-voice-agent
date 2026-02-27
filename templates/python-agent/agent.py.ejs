@@ -3,8 +3,13 @@
 Uses the official livekit-agents library with VoicePipelineAgent.
 """
 
-import os
+import asyncio
+import json
 import logging
+import os
+import time
+import urllib.error
+import urllib.request
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.agents.pipeline import VoicePipelineAgent
@@ -21,6 +26,81 @@ from custom_tts.piper_tts import PiperTTSPlugin
 logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
 
+<% if (llmProvider !== 'openai') { -%>
+VOICE_MAP = {
+    "en": "en_US-lessac-medium",
+    "ru": "ru_RU-dmitri-medium",
+    "de": "de_DE-thorsten-medium",
+    "fr": "fr_FR-upmc-medium",
+    "es": "es_ES-carlfm-medium",
+}
+
+
+def _build_hf_voice_url(voice_name: str) -> str:
+    # Example voice_name: en_US-lessac-medium
+    language_region, speaker, quality = voice_name.split("-")
+    language = language_region.split("_")[0]
+    return (
+        f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
+        f"{language}/{language_region}/{quality}/{voice_name}"
+    )
+
+
+def ensure_piper_voice(language: str) -> str:
+    tts_model = VOICE_MAP.get(language, "en_US-lessac-medium")
+    onnx_path = f"/app/models/{tts_model}.onnx"
+    json_path = f"/app/models/{tts_model}.onnx.json"
+
+    if os.path.exists(onnx_path) and os.path.exists(json_path):
+        return onnx_path
+
+    os.makedirs("/app/models", exist_ok=True)
+    logger.info("Language auto-detected: %s. Ensuring voice model %s...", language, tts_model)
+    hf_url = _build_hf_voice_url(tts_model)
+
+    if not os.path.exists(onnx_path):
+        urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
+    if not os.path.exists(json_path):
+        urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
+
+    return onnx_path
+
+
+def _ollama_ready(base_url: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=3) as response:
+            return 200 <= response.status < 300
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+async def wait_for_ollama(base_url: str, timeout_seconds: int = 60) -> None:
+    logger.info("Waiting for Ollama to become ready at %s...", base_url)
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        if await asyncio.to_thread(_ollama_ready, base_url):
+            logger.info("Ollama is ready.")
+            return
+        await asyncio.sleep(2)
+
+    raise RuntimeError(f"Ollama was not ready within {timeout_seconds} seconds at {base_url}")
+
+
+def _set_agent_engines(agent: VoicePipelineAgent, llm_engine, tts_engine, stt_engine) -> None:
+    # Keep compatibility with both public and internal attribute names.
+    for attr, value in (
+        ("llm", llm_engine),
+        ("tts", tts_engine),
+        ("stt", stt_engine),
+        ("_llm", llm_engine),
+        ("_tts", tts_engine),
+        ("_stt", stt_engine),
+    ):
+        if hasattr(agent, attr):
+            setattr(agent, attr, value)
+<% } -%>
+
 
 async def entrypoint(ctx: JobContext):
     """Called when a participant joins the LiveKit room."""
@@ -31,43 +111,41 @@ async def entrypoint(ctx: JobContext):
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
 
-    # ─── Build the Voice Pipeline ────────────────────────────────────
 <% if (llmProvider === 'openai') { -%>
+    # ─── Build the Voice Pipeline ────────────────────────────────────
     llm = openai_plugin.LLM(model="gpt-4o-mini")
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
-    # Model: <%= modelName %> | Language: <%= language %>
-    llm = openai_plugin.LLM.with_ollama(
-        model="<%= modelName %>",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
-    )
-    
-    # ─── Automatic Voice Mapping ──────────────────────────────────
-    import os, urllib.request
-    voice_map = {
-        "en": "en_US-lessac-medium",
-        "ru": "ru_RU-dmitri-medium",
-        "de": "de_DE-thorsten-medium",
-        "fr": "fr_FR-upmc-medium",
-        "es": "es_ES-carlfm-medium"
+    # ─── Build the Voice Pipeline ────────────────────────────────────
+    settings = {
+        "model": "<%= modelName %>",
+        "temperature": 0.7,
+        "language": "<%= language %>",
     }
-    lang = "<%= language %>"
-    tts_model = voice_map.get(lang, "en_US-lessac-medium")
-    
-    onnx_path = f"/app/models/{tts_model}.onnx"
-    json_path = f"/app/models/{tts_model}.onnx.json"
-    
-    # Ensure model exists or download it automatically
-    if not os.path.exists(onnx_path):
-        os.makedirs("/app/models", exist_ok=True)
-        logger.info(f"Language auto-detected: {lang}. Downloading {tts_model}...")
-        hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{tts_model.split('-')[0]}/{tts_model.split('-')[0]}_{tts_model.split('-')[1]}/{tts_model.split('-')[2]}/{tts_model}"
-        urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
-        urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
 
-    tts_engine = PiperTTSPlugin(model=onnx_path)
-    stt_engine = FasterWhisperSTT(model="base", language=lang)
+    ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+    await wait_for_ollama(ollama_base_url, timeout_seconds=60)
+
+    def create_llm_engine(model_name: str, temperature: float):
+        try:
+            return openai_plugin.LLM.with_ollama(
+                model=model_name,
+                base_url=ollama_base_url,
+                temperature=temperature,
+            )
+        except TypeError:
+            logger.warning(
+                "with_ollama() does not support temperature in this version; continuing without it."
+            )
+            return openai_plugin.LLM.with_ollama(
+                model=model_name,
+                base_url=ollama_base_url,
+            )
+
+    llm = create_llm_engine(settings["model"], settings["temperature"])
+    stt_engine = FasterWhisperSTT(model="base", language=settings["language"])
+    tts_engine = PiperTTSPlugin(model=ensure_piper_voice(settings["language"]))
 <% } -%>
 
     agent = VoicePipelineAgent(
@@ -79,6 +157,57 @@ async def entrypoint(ctx: JobContext):
 
     # Start the agent in the room
     agent.start(ctx.room, participant)
+
+<% if (llmProvider !== 'openai') { -%>
+    async def apply_settings_update(payload: bytes) -> None:
+        nonlocal llm, tts_engine
+        try:
+            message = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            logger.warning("Ignoring invalid settings payload.")
+            return
+
+        if not isinstance(message, dict):
+            return
+
+        updated = False
+
+        model = message.get("model")
+        if isinstance(model, str) and model.strip():
+            settings["model"] = model.strip()
+            updated = True
+
+        temperature = message.get("temperature")
+        if isinstance(temperature, (int, float)):
+            settings["temperature"] = max(0.0, min(2.0, float(temperature)))
+            updated = True
+
+        language = message.get("language")
+        if isinstance(language, str) and language.strip():
+            settings["language"] = language.strip().lower()
+            updated = True
+
+        if not updated:
+            return
+
+        logger.info("Applying updated settings from UI: %s", settings)
+        llm = create_llm_engine(settings["model"], settings["temperature"])
+        tts_engine = PiperTTSPlugin(model=await asyncio.to_thread(ensure_piper_voice, settings["language"]))
+        stt_engine.language = settings["language"]
+        _set_agent_engines(agent, llm, tts_engine, stt_engine)
+
+    def handle_data(packet) -> None:
+        payload = getattr(packet, "data", packet)
+        if isinstance(payload, (bytes, bytearray)):
+            asyncio.create_task(apply_settings_update(bytes(payload)))
+
+    try:
+        ctx.room.on("data_received", handle_data)
+    except TypeError:
+        @ctx.room.on("data_received")
+        def _decorated_handle_data(packet) -> None:
+            handle_data(packet)
+<% } -%>
 
     await agent.say("Hello! I'm your voice assistant. How can I help you today?")
 

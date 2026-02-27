@@ -91,6 +91,11 @@ services:
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - LIVEKIT_URL=ws://livekit:7880
       - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
+<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+      - OLLAMA_BASE_URL=http://ollama:11434
+<% } else if (llmProvider === 'ollama') { -%>
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+<% } -%>
 <% } -%>
 
 <% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>

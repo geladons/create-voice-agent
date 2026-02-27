@@ -1,20 +1,78 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
-  LiveKitRoom,
-  RoomAudioRenderer,
-  useVoiceAssistant,
   BarVisualizer,
   Chat,
   DisconnectButton,
+  LiveKitRoom,
+  RoomAudioRenderer,
+  useRoomContext,
+  useVoiceAssistant,
 } from "@livekit/components-react";
+import { ConnectionState, RoomEvent } from "livekit-client";
 import "@livekit/components-styles";
 
-function VoiceAssistantUI() {
+type AgentSettings = {
+  model: string;
+  temperature: number;
+  language: string;
+};
+
+type VoiceAssistantUIProps = {
+  settings: AgentSettings;
+  setSettings: Dispatch<SetStateAction<AgentSettings>>;
+  availableModels: string[];
+  onRoomStateChange: (state: ConnectionState) => void;
+  onDisconnected: () => void;
+};
+
+function VoiceAssistantUI({
+  settings,
+  setSettings,
+  availableModels,
+  onRoomStateChange,
+  onDisconnected,
+}: VoiceAssistantUIProps) {
+  const room = useRoomContext();
   const { state, audioTrack } = useVoiceAssistant();
-  const [temperature, setTemperature] = useState(0.7);
-  const [selectedModel, setSelectedModel] = useState("<%= modelName %>");
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const modelOptions = useMemo(
+    () => Array.from(new Set([settings.model, ...availableModels])),
+    [availableModels, settings.model]
+  );
+
+  useEffect(() => {
+    const handleConnectionStateChanged = (nextState: ConnectionState) => {
+      onRoomStateChange(nextState);
+      if (nextState === ConnectionState.Disconnected) {
+        onDisconnected();
+      }
+    };
+
+    handleConnectionStateChanged(room.state);
+    room.on(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
+
+    return () => {
+      room.off(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
+    };
+  }, [onDisconnected, onRoomStateChange, room]);
+
+  useEffect(() => {
+    if (room.state !== ConnectionState.Connected) {
+      return;
+    }
+
+    const payload = new TextEncoder().encode(JSON.stringify(settings));
+
+    room.localParticipant
+      .publishData(payload, { reliable: true, topic: "agent-settings" })
+      .then(() => setSyncError(null))
+      .catch((err: unknown) => {
+        setSyncError(err instanceof Error ? err.message : "Failed to sync settings");
+      });
+  }, [room, settings]);
 
   return (
     <div
@@ -35,7 +93,7 @@ function VoiceAssistantUI() {
         }}
       >
         <h2 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Voice + Text</h2>
-        <p style={{ marginTop: 0, color: "#374151" }}>Agent Status: {state}</p>
+        <p style={{ marginTop: 0, color: "#374151" }}>Agent State: {state}</p>
         <BarVisualizer
           state={state}
           barCount={5}
@@ -70,34 +128,67 @@ function VoiceAssistantUI() {
 
         <div>
           <h4 style={{ margin: "0 0 0.5rem 0" }}>System Status</h4>
-          <p style={{ margin: 0, color: "#374151" }}>Connection State: {state}</p>
+          <p style={{ margin: 0, color: "#374151" }}>Room State: {room.state}</p>
+          <p style={{ margin: "0.4rem 0 0 0", color: "#374151" }}>Agent State: {state}</p>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           <h4 style={{ margin: 0 }}>Model Settings</h4>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Temperature: {temperature.toFixed(2)}</span>
+            <span>Temperature: {settings.temperature.toFixed(2)}</span>
             <input
               type="range"
               min="0"
               max="1"
               step="0.01"
-              value={temperature}
-              onChange={(event) => setTemperature(Number(event.target.value))}
+              value={settings.temperature}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  temperature: Number(event.target.value),
+                }))
+              }
             />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <span>Select Model</span>
             <select
-              value={selectedModel}
-              onChange={(event) => setSelectedModel(event.target.value)}
+              value={settings.model}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  model: event.target.value,
+                }))
+              }
               style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
             >
-              <option value="<%= modelName %>"><%= modelName %></option>
-              <option value="qwen3-vl:2b">qwen3-vl:2b (Fastest)</option>
-              <option value="llama3.2:3b">llama3.2:3b (Smart)</option>
+              {modelOptions.map((modelName) => (
+                <option key={modelName} value={modelName}>
+                  {modelName}
+                </option>
+              ))}
             </select>
           </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <span>Language</span>
+            <select
+              value={settings.language}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  language: event.target.value,
+                }))
+              }
+              style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
+            >
+              <option value="en">EN</option>
+              <option value="ru">RU</option>
+              <option value="de">DE</option>
+              <option value="fr">FR</option>
+              <option value="es">ES</option>
+            </select>
+          </label>
+          {syncError ? <p style={{ margin: 0, color: "#991b1b" }}>{syncError}</p> : null}
         </div>
 
         <DisconnectButton>Disconnect</DisconnectButton>
@@ -110,24 +201,30 @@ export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [roomState, setRoomState] = useState<ConnectionState>(ConnectionState.Disconnected);
   const [serverUrl, setServerUrl] = useState("");
   const [showSecurityWarning, setShowSecurityWarning] = useState(false);
+  const [settings, setSettings] = useState<AgentSettings>({
+    model: "<%= modelName %>",
+    temperature: 0.7,
+    language: "<%= language %>",
+  });
+  const [availableModels, setAvailableModels] = useState<string[]>(["<%= modelName %>"]);
+
+  const fallbackModels = useMemo(
+    () => ["<%= modelName %>", "qwen3-vl:2b", "qwen3-vl:4b", "llama3.2:3b"],
+    []
+  );
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       let envUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-      // Aggressively override if the baked-in variable is empty, localhost, or 127.0.0.1
       if (!envUrl || envUrl.includes("127.0.0.1") || envUrl.includes("localhost")) {
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         envUrl = `${protocol}//${window.location.hostname}:7880`;
       }
       setServerUrl(envUrl);
-
-      const isInsecureRemoteHost =
-        window.location.protocol === "http:" &&
-        window.location.hostname !== "localhost" &&
-        window.location.hostname !== "127.0.0.1";
-      setShowSecurityWarning(isInsecureRemoteHost);
+      setShowSecurityWarning(!Boolean(window.navigator.mediaDevices?.getUserMedia));
     }
   }, []);
 
@@ -145,6 +242,49 @@ export default function Home() {
     fetchToken();
   }, []);
 
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadModels() {
+      try {
+        const res = await fetch("/api/models");
+        if (!res.ok) throw new Error("Failed to fetch model list");
+        const data = await res.json();
+        const models = Array.isArray(data.models)
+          ? data.models.filter((item: unknown): item is string => typeof item === "string")
+          : [];
+
+        if (!isCancelled && models.length > 0) {
+          setAvailableModels(Array.from(new Set([...models, ...fallbackModels])));
+          return;
+        }
+      } catch {
+        // Fall back to defaults if dynamic discovery fails.
+      }
+
+      if (!isCancelled) {
+        setAvailableModels(fallbackModels);
+      }
+    }
+
+    loadModels();
+    return () => {
+      isCancelled = true;
+    };
+  }, [fallbackModels]);
+
+  useEffect(() => {
+    setAvailableModels((current) =>
+      Array.from(new Set([settings.model, ...current, ...fallbackModels]))
+    );
+  }, [fallbackModels, settings.model]);
+
+  useEffect(() => {
+    if (roomState === ConnectionState.Disconnected) {
+      setConnected(false);
+    }
+  }, [roomState]);
+
   const securityBanner = showSecurityWarning ? (
     <div
       style={{
@@ -157,8 +297,8 @@ export default function Home() {
         fontWeight: 600,
       }}
     >
-      ⚠️ Microphone access is blocked by browsers over HTTP on remote IPs. Use HTTPS, Ngrok,
-      or enable 'Insecure origins treated as secure' in chrome://flags.
+      ⚠️ Security Warning: microphone access is blocked because `navigator.mediaDevices` is not
+      available. Use HTTPS, Ngrok, or allow insecure origins for local testing.
     </div>
   ) : null;
 
@@ -185,7 +325,7 @@ export default function Home() {
     <main style={{ padding: "2rem", textAlign: "center", maxWidth: "1200px", margin: "0 auto" }}>
       <h1><%= projectName %></h1>
       {securityBanner}
-      {!connected && (
+      {(!connected || roomState === ConnectionState.Disconnected) && (
         <button
           type="button"
           onClick={() => setConnected(true)}
@@ -196,18 +336,23 @@ export default function Home() {
         </button>
       )}
       {serverUrl ? (
-        <LiveKitRoom
-          serverUrl={serverUrl}
-          token={token}
-          connect={connected}
-          audio={true}
-        >
-          <VoiceAssistantUI />
+        <LiveKitRoom serverUrl={serverUrl} token={token} connect={connected} audio={true}>
+          <VoiceAssistantUI
+            settings={settings}
+            setSettings={setSettings}
+            availableModels={availableModels}
+            onRoomStateChange={setRoomState}
+            onDisconnected={() => {
+              setConnected(false);
+              setRoomState(ConnectionState.Disconnected);
+            }}
+          />
           <RoomAudioRenderer />
         </LiveKitRoom>
       ) : (
         <p>Detecting LiveKit server URL...</p>
       )}
+      <p style={{ color: "#475569", marginTop: "0.75rem" }}>Connection State: {roomState}</p>
     </main>
   );
 }
