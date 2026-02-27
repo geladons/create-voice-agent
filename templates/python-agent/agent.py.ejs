@@ -60,9 +60,19 @@ async def entrypoint(ctx: JobContext):
     if not os.path.exists(onnx_path):
         os.makedirs("/app/models", exist_ok=True)
         logger.info(f"Language auto-detected: {language}. Downloading {tts_model}...")
-        hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{tts_model.split('-')[0]}/{tts_model.split('-')[0]}_{tts_model.split('-')[1]}/{tts_model.split('-')[2]}/{tts_model}"
-        urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
-        urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
+        
+        # Correct URL construction for rhasspy/piper-voices
+        parts = tts_model.split('-')
+        lang_dir = parts[0].split('_')[0]
+        hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{lang_dir}/{parts[0]}/{parts[1]}/{parts[2]}/{tts_model}"
+        
+        try:
+            logger.info(f"Downloading from: {hf_url}.onnx")
+            urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
+            urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
+            logger.info("Download complete.")
+        except Exception as e:
+            logger.error(f"Failed to download TTS model: {e}")
 
     tts_engine = PiperTTSPlugin(model=onnx_path)
     stt_engine = FasterWhisperSTT(model="base", language=language)

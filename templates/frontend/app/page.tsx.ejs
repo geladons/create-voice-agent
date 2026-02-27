@@ -8,13 +8,16 @@ import {
   BarVisualizer,
   Chat,
   DisconnectButton,
-  useLocalParticipant
+  useLocalParticipant,
+  useConnectionState,
+  ConnectionState
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 
 function VoiceAssistantUI() {
   const { state, audioTrack } = useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
+  const roomState = useConnectionState();
 
   const [selectedModel, setSelectedModel] = useState("<%= modelName %>");
   const [temperature, setTemperature] = useState(0.7);
@@ -23,11 +26,15 @@ function VoiceAssistantUI() {
   const [reasoning, setReasoning] = useState(false);
 
   useEffect(() => {
-    if (localParticipant) {
-      const payload = JSON.stringify({ temperature, topP, topK, reasoning });
-      localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
+    if (localParticipant && roomState === ConnectionState.Connected) {
+      try {
+        const payload = JSON.stringify({ temperature, topP, topK, reasoning });
+        localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
+      } catch (e) {
+        console.warn("Data channel not ready yet:", e);
+      }
     }
-  }, [temperature, topP, topK, reasoning, localParticipant]);
+  }, [temperature, topP, topK, reasoning, localParticipant, roomState]);
 
   return (
     <div
