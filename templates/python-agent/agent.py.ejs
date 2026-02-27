@@ -3,18 +3,16 @@
 Uses the official livekit-agents library with VoicePipelineAgent.
 """
 
-import asyncio
-import contextlib
 import json
-import logging
 import os
-import time
-import urllib.error
+import logging
 import urllib.request
 
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
+from livekit.agents.llm import ChatContext, ChatMessage
 from livekit.agents.pipeline import VoicePipelineAgent
 from livekit.plugins import silero
+from livekit.rtc import DataPacket
 <% if (llmProvider === 'openai') { -%>
 from livekit.plugins import deepgram
 from livekit.plugins import openai as openai_plugin
@@ -26,204 +24,6 @@ from custom_tts.piper_tts import PiperTTSPlugin
 
 logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
-
-<% if (llmProvider !== 'openai') { -%>
-REASONING_PROMPT = (
-    "[reasoning-mode] You are a reasoning model. Think step by step inside <thought> tags "
-    "before finalizing your answer."
-)
-
-VOICE_MAP = {
-    "en": "en_US-lessac-medium",
-    "ru": "ru_RU-dmitri-medium",
-    "de": "de_DE-thorsten-medium",
-    "fr": "fr_FR-upmc-medium",
-    "es": "es_ES-carlfm-medium",
-}
-
-
-def _build_hf_voice_url(voice_name: str) -> str:
-    # Example voice_name: en_US-lessac-medium
-    language_region, _speaker, quality = voice_name.split("-")
-    language = language_region.split("_")[0]
-    return (
-        f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/"
-        f"{language}/{language_region}/{quality}/{voice_name}"
-    )
-
-
-def _download_with_retry(url: str, destination: str, retries: int = 4) -> None:
-    delay_seconds = 1
-    for attempt in range(1, retries + 1):
-        try:
-            urllib.request.urlretrieve(url, destination)
-            return
-        except Exception as exc:
-            if attempt >= retries:
-                raise RuntimeError(f"Failed to download {url} after {retries} attempts") from exc
-            logger.warning(
-                "Download failed (%s/%s) for %s: %s. Retrying in %ss...",
-                attempt,
-                retries,
-                url,
-                exc,
-                delay_seconds,
-            )
-            time.sleep(delay_seconds)
-            delay_seconds *= 2
-
-
-def ensure_piper_voice(language: str) -> str:
-    tts_model = VOICE_MAP.get(language, "en_US-lessac-medium")
-    onnx_path = f"/app/models/{tts_model}.onnx"
-    json_path = f"/app/models/{tts_model}.onnx.json"
-
-    if os.path.exists(onnx_path) and os.path.exists(json_path):
-        return onnx_path
-
-    os.makedirs("/app/models", exist_ok=True)
-    hf_url = _build_hf_voice_url(tts_model)
-    logger.info("Language auto-detected: %s. Ensuring voice model %s...", language, tts_model)
-
-    if not os.path.exists(onnx_path):
-        _download_with_retry(f"{hf_url}.onnx?download=true", onnx_path)
-    if not os.path.exists(json_path):
-        _download_with_retry(f"{hf_url}.onnx.json?download=true", json_path)
-
-    return onnx_path
-
-
-def _ollama_ready(base_url: str) -> bool:
-    try:
-        with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=3) as response:
-            return 200 <= response.status < 300
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return False
-
-
-async def wait_for_ollama(base_url: str, timeout_seconds: int = 60) -> None:
-    logger.info("Waiting for Ollama to become ready at %s...", base_url)
-    deadline = time.monotonic() + timeout_seconds
-
-    while time.monotonic() < deadline:
-        if await asyncio.to_thread(_ollama_ready, base_url):
-            logger.info("Ollama is ready.")
-            return
-        await asyncio.sleep(2)
-
-    raise RuntimeError(f"Ollama was not ready within {timeout_seconds} seconds at {base_url}")
-
-
-def create_llm_engine(ollama_base_url: str, settings: dict):
-    kwargs = {
-        "model": settings["model"],
-        "base_url": ollama_base_url,
-        "temperature": settings["temperature"],
-        "top_p": settings["top_p"],
-        "top_k": settings["top_k"],
-        "max_tokens": settings["max_tokens"],
-    }
-    optional_keys = ["max_tokens", "top_k", "top_p", "temperature"]
-
-    while True:
-        try:
-            return openai_plugin.LLM.with_ollama(**kwargs)
-        except TypeError as exc:
-            dropped_key = None
-            message = str(exc)
-            for key in optional_keys:
-                if key in kwargs and key in message:
-                    dropped_key = key
-                    break
-            if dropped_key is None:
-                for key in optional_keys:
-                    if key in kwargs:
-                        dropped_key = key
-                        break
-            if dropped_key is None:
-                logger.warning("Falling back to model/base_url only due to API mismatch: %s", exc)
-                return openai_plugin.LLM.with_ollama(
-                    model=settings["model"],
-                    base_url=ollama_base_url,
-                )
-            logger.warning("LLM setting '%s' is unsupported in this SDK/runtime and was ignored.", dropped_key)
-            kwargs.pop(dropped_key, None)
-
-
-def _set_agent_engines(agent: VoicePipelineAgent, llm_engine, tts_engine, stt_engine) -> None:
-    # Keep compatibility with both public and internal attribute names.
-    for attr, value in (
-        ("llm", llm_engine),
-        ("tts", tts_engine),
-        ("stt", stt_engine),
-        ("_llm", llm_engine),
-        ("_tts", tts_engine),
-        ("_stt", stt_engine),
-    ):
-        if hasattr(agent, attr):
-            setattr(agent, attr, value)
-
-
-def _update_reasoning_prompt(agent: VoicePipelineAgent, enabled: bool) -> None:
-    chat_ctx = getattr(agent, "chat_ctx", None)
-    if chat_ctx is None:
-        logger.warning("Agent does not expose chat_ctx; reasoning prompt could not be updated.")
-        return
-
-    try:
-        messages = getattr(chat_ctx, "messages", None)
-        if isinstance(messages, list):
-            messages[:] = [
-                msg
-                for msg in messages
-                if REASONING_PROMPT not in str(getattr(msg, "content", ""))
-            ]
-
-        if not enabled:
-            return
-
-        if hasattr(chat_ctx, "append"):
-            try:
-                chat_ctx.append(role="system", text=REASONING_PROMPT)
-                return
-            except TypeError:
-                pass
-
-        if hasattr(chat_ctx, "add_message"):
-            try:
-                chat_ctx.add_message(role="system", content=REASONING_PROMPT)
-                return
-            except TypeError:
-                pass
-
-        if isinstance(messages, list):
-            try:
-                from livekit.agents.llm import ChatMessage
-
-                messages.append(ChatMessage(role="system", content=REASONING_PROMPT))
-            except Exception as exc:
-                logger.warning("Failed to append reasoning prompt to chat context: %s", exc)
-    except Exception as exc:
-        logger.warning("Failed to update reasoning prompt state: %s", exc)
-
-
-async def _publish_room_data(ctx: JobContext, payload: dict, topic: str, reliable: bool = False) -> None:
-    data = json.dumps(payload).encode("utf-8")
-    publisher = getattr(ctx.room.local_participant, "publish_data", None)
-    if publisher is None:
-        return
-
-    try:
-        result = publisher(data, reliable=reliable, topic=topic)
-    except TypeError:
-        try:
-            result = publisher(data, reliable)
-        except TypeError:
-            result = publisher(data)
-
-    if asyncio.iscoroutine(result):
-        await result
-<% } -%>
 
 
 async def entrypoint(ctx: JobContext):
@@ -240,138 +40,70 @@ async def entrypoint(ctx: JobContext):
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
-    settings = {
-        "model": "<%= modelName %>",
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "top_k": 40,
-        "max_tokens": 512,
-        "reasoning_mode": False,
-        "language": "<%= language %>",
+    llm = openai_plugin.LLM.with_ollama(
+        model="<%= modelName %>",
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+    )
+
+    voice_map = {
+        "en": "en_US-lessac-medium",
+        "ru": "ru_RU-dmitri-medium",
+        "de": "de_DE-thorsten-medium",
+        "fr": "fr_FR-upmc-medium",
+        "es": "es_ES-carlfm-medium",
     }
+    language = "<%= language %>"
+    tts_model = voice_map.get(language, "en_US-lessac-medium")
+    onnx_path = f"/app/models/{tts_model}.onnx"
+    json_path = f"/app/models/{tts_model}.onnx.json"
 
-    ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-    await wait_for_ollama(ollama_base_url, timeout_seconds=60)
+    if not os.path.exists(onnx_path):
+        os.makedirs("/app/models", exist_ok=True)
+        logger.info(f"Language auto-detected: {language}. Downloading {tts_model}...")
+        hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{tts_model.split('-')[0]}/{tts_model.split('-')[0]}_{tts_model.split('-')[1]}/{tts_model.split('-')[2]}/{tts_model}"
+        urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
+        urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
 
-    llm = create_llm_engine(ollama_base_url, settings)
-    stt_engine = FasterWhisperSTT(model="base", language=settings["language"])
-    tts_engine = PiperTTSPlugin(model=ensure_piper_voice(settings["language"]))
+    tts_engine = PiperTTSPlugin(model=onnx_path)
+    stt_engine = FasterWhisperSTT(model="base", language=language)
 <% } -%>
+
+    initial_ctx = ChatContext(
+        messages=[
+            ChatMessage(
+                role="system",
+                content="You are a helpful, conversational AI. Keep your responses concise and natural.",
+            )
+        ]
+    )
 
     agent = VoicePipelineAgent(
         vad=silero.VAD.load(),
         stt=stt_engine,
         llm=llm,
         tts=tts_engine,
+        chat_ctx=initial_ctx,
     )
 
     agent.start(ctx.room, participant)
 
-<% if (llmProvider !== 'openai') { -%>
-    _update_reasoning_prompt(agent, settings["reasoning_mode"])
-
-    async def heartbeat_loop() -> None:
-        while True:
-            await _publish_room_data(
-                ctx,
-                {
-                    "type": "heartbeat",
-                    "service": "agent",
-                    "status": "online",
-                    "timestamp": int(time.time()),
-                },
-                topic="agent-heartbeat",
-                reliable=False,
-            )
-            await asyncio.sleep(10)
-
-    async def apply_settings_update(payload: bytes) -> None:
-        nonlocal llm, tts_engine
+    @ctx.room.on("data_received")
+    def on_data_received(data_packet: DataPacket):
         try:
-            message = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            logger.warning("Ignoring invalid settings payload.")
-            return
+            payload = json.loads(data_packet.data.decode("utf-8"))
+            logger.info(f"Received UI settings update: {payload}")
+            if "reasoning" in payload:
+                sys_msg = agent.chat_ctx.messages[0]
+                if payload["reasoning"]:
+                    sys_msg.content = "You are a highly logical reasoning AI. Think step-by-step before answering. Keep your spoken output natural but explain your logic."
+                    logger.info("Switched to Reasoning Mode.")
+                else:
+                    sys_msg.content = "You are a helpful, conversational AI. Keep your responses concise and natural."
+                    logger.info("Switched to Standard Mode.")
+        except Exception as e:
+            logger.error(f"Error handling UI data: {e}")
 
-        if not isinstance(message, dict):
-            return
-
-        updated = False
-
-        model = message.get("model")
-        if isinstance(model, str) and model.strip():
-            settings["model"] = model.strip()
-            updated = True
-
-        temperature = message.get("temperature")
-        if isinstance(temperature, (int, float)):
-            settings["temperature"] = max(0.0, min(2.0, float(temperature)))
-            updated = True
-
-        top_p = message.get("top_p")
-        if isinstance(top_p, (int, float)):
-            settings["top_p"] = max(0.0, min(1.0, float(top_p)))
-            updated = True
-
-        top_k = message.get("top_k")
-        if isinstance(top_k, (int, float)):
-            settings["top_k"] = max(0, min(100, int(top_k)))
-            updated = True
-
-        max_tokens = message.get("max_tokens")
-        if isinstance(max_tokens, (int, float)):
-            settings["max_tokens"] = max(64, min(8192, int(max_tokens)))
-            updated = True
-
-        reasoning_mode = message.get("reasoning_mode")
-        if isinstance(reasoning_mode, bool):
-            settings["reasoning_mode"] = reasoning_mode
-            updated = True
-
-        language = message.get("language")
-        if isinstance(language, str) and language.strip():
-            settings["language"] = language.strip().lower()
-            updated = True
-
-        if not updated:
-            return
-
-        logger.info("Applying updated settings from UI: %s", settings)
-
-        llm = create_llm_engine(ollama_base_url, settings)
-        tts_engine = PiperTTSPlugin(
-            model=await asyncio.to_thread(ensure_piper_voice, settings["language"])
-        )
-        stt_engine.language = settings["language"]
-
-        _set_agent_engines(agent, llm, tts_engine, stt_engine)
-        _update_reasoning_prompt(agent, settings["reasoning_mode"])
-
-    def handle_data(packet) -> None:
-        payload = getattr(packet, "data", packet)
-        if isinstance(payload, (bytes, bytearray)):
-            asyncio.create_task(apply_settings_update(bytes(payload)))
-
-    try:
-        ctx.room.on("data_received", handle_data)
-    except TypeError:
-        @ctx.room.on("data_received")
-        def _decorated_handle_data(packet) -> None:
-            handle_data(packet)
-
-    heartbeat_task = asyncio.create_task(heartbeat_loop())
-<% } -%>
-
-    try:
-        await agent.say("Hello! I'm your voice assistant. How can I help you today?")
-        await asyncio.Event().wait()
-    finally:
-<% if (llmProvider !== 'openai') { -%>
-        heartbeat_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await heartbeat_task
-<% } -%>
-        logger.info("Agent session finished.")
+    await agent.say("Hello! I'm online. How can I help you today?")
 
 
 if __name__ == "__main__":
