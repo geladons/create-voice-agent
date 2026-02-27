@@ -51,6 +51,7 @@ export async function scaffold({
   modelName = 'qwen3-vl:2b',
   language = 'en',
   ollamaIp = 'localhost',
+  hostIp = '127.0.0.1',
 }) {
   const projectDir = path.resolve(process.cwd(), projectName);
 
@@ -71,6 +72,7 @@ export async function scaffold({
     modelName,
     language,
     ollamaIp,
+    hostIp,
     cpuLimit,
   };
 
@@ -99,4 +101,3 @@ export async function scaffold({
 
   console.log(`\n📁 Generated files in ./${projectName}/`);
 }
-

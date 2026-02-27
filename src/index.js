@@ -1,7 +1,21 @@
 import { Command } from 'commander';
-import { select, input, confirm } from '@inquirer/prompts';
+import { select, confirm } from '@inquirer/prompts';
+import input from '@inquirer/input';
 import { execSync } from 'node:child_process';
+import os from 'node:os';
 import { scaffold } from './scaffold.js';
+
+function getLocalIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
 
 // ─── Ollama API Fetching ──────────────────────────────────────────────
 async function fetchOllamaModels(ollamaIp = '127.0.0.1') {
@@ -172,6 +186,7 @@ program
     let includeFrontend = true;
     let shouldAutoStart = false;
     let ollamaIp = 'localhost';
+    let hostIp = getLocalIp();
 
     // ─── AUTO MODE ────────────────────────────────────────────────
     if (setupMode === 'auto') {
@@ -308,6 +323,12 @@ program
       shouldAutoStart = false;
     }
 
+    hostIp = await input({
+      message:
+        '🌐 Enter the IP address where this agent will run (Press Enter to use detected IP):',
+      default: getLocalIp(),
+    });
+
     // ─── Scaffold ─────────────────────────────────────────────────
     await scaffold({
       projectName,
@@ -317,6 +338,7 @@ program
       modelName,
       language,
       ollamaIp,
+      hostIp,
     });
 
     console.log(`\n✅ Project "${projectName}" created successfully!\n`);

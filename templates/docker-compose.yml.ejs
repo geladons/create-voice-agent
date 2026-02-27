@@ -36,18 +36,17 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "7880:7880"       # HTTP / WebSocket
-      - "7881:7881"       # RTC TCP
-      - "50000-50050:50000-50050/udp"   # WebRTC UDP (strictly limited range)
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50050:50000-50050/udp"
     environment:
-      - LIVEKIT_KEYS=${LIVEKIT_API_KEY}:${LIVEKIT_API_SECRET}
+      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      - "NODE_IP=<%= hostIp %>"
+      - "UDP_PORT=50000-50050"
+      - "REDIS_HOST=redis:6379"
     command: >
-      --config /etc/livekit.yaml
       --bind 0.0.0.0
-      --redis-host redis:6379
-      --rtc.port-range-start 50000
-      --rtc.port-range-end 50050
-      --rtc.tcp-port 7881
+      --dev
 
   # ─── Python Voice Agent ────────────────────────────────────────────
   agent:
