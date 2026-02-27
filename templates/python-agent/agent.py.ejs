@@ -40,7 +40,7 @@ async def entrypoint(ctx: JobContext):
 <% } else { -%>
     llm = openai_plugin.LLM.with_ollama(
         model="<%= modelName %>",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
     )
 
     voice_map = {

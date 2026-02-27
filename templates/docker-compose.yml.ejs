@@ -66,7 +66,7 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
 <% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/v1}
 <% } else if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
 <% } else { -%>
