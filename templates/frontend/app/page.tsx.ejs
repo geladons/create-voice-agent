@@ -29,9 +29,10 @@ function VoiceAssistantUI() {
     if (localParticipant && roomState === ConnectionState.Connected) {
       try {
         const payload = JSON.stringify({ temperature, topP, topK, reasoning });
-        localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true });
+        localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true })
+          .catch((err) => console.warn("Data channel not ready:", err));
       } catch (e) {
-        console.warn("Data channel not ready yet:", e);
+        console.warn("Payload error:", e);
       }
     }
   }, [temperature, topP, topK, reasoning, localParticipant, roomState]);

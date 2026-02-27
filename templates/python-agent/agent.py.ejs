@@ -1,6 +1,6 @@
 """
 <%= projectName %> — Voice AI Agent
-Uses the official livekit-agents library with VoicePipelineAgent.
+Uses the official livekit-agents library with AgentSession.
 """
 
 import json
@@ -8,9 +8,7 @@ import os
 import logging
 import urllib.request
 
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
-from livekit.agents.llm import ChatContext, ChatMessage
-from livekit.agents.pipeline import VoicePipelineAgent
+from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import silero
 from livekit.rtc import DataPacket
 <% if (llmProvider === 'openai') { -%>
@@ -60,12 +58,11 @@ async def entrypoint(ctx: JobContext):
     if not os.path.exists(onnx_path):
         os.makedirs("/app/models", exist_ok=True)
         logger.info(f"Language auto-detected: {language}. Downloading {tts_model}...")
-        
-        # Correct URL construction for rhasspy/piper-voices
-        parts = tts_model.split('-')
-        lang_dir = parts[0].split('_')[0]
+
+        parts = tts_model.split("-")
+        lang_dir = parts[0].split("_")[0]
         hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{lang_dir}/{parts[0]}/{parts[1]}/{parts[2]}/{tts_model}"
-        
+
         try:
             logger.info(f"Downloading from: {hf_url}.onnx")
             urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
@@ -78,24 +75,18 @@ async def entrypoint(ctx: JobContext):
     stt_engine = FasterWhisperSTT(model="base", language=language)
 <% } -%>
 
-    initial_ctx = ChatContext(
-        messages=[
-            ChatMessage(
-                role="system",
-                content="You are a helpful, conversational AI. Keep your responses concise and natural.",
-            )
-        ]
+    agent = Agent(
+        instructions="You are a helpful, conversational AI. Keep your responses concise and natural."
     )
 
-    agent = VoicePipelineAgent(
+    session = AgentSession(
         vad=silero.VAD.load(),
         stt=stt_engine,
         llm=llm,
         tts=tts_engine,
-        chat_ctx=initial_ctx,
     )
 
-    agent.start(ctx.room, participant)
+    await session.start(agent=agent, room=ctx.room)
 
     @ctx.room.on("data_received")
     def on_data_received(data_packet: DataPacket):
@@ -103,17 +94,14 @@ async def entrypoint(ctx: JobContext):
             payload = json.loads(data_packet.data.decode("utf-8"))
             logger.info(f"Received UI settings update: {payload}")
             if "reasoning" in payload:
-                sys_msg = agent.chat_ctx.messages[0]
                 if payload["reasoning"]:
-                    sys_msg.content = "You are a highly logical reasoning AI. Think step-by-step before answering. Keep your spoken output natural but explain your logic."
+                    agent.instructions = "You are a highly logical reasoning AI. Think step-by-step before answering. Keep your spoken output natural but explain your logic."
                     logger.info("Switched to Reasoning Mode.")
                 else:
-                    sys_msg.content = "You are a helpful, conversational AI. Keep your responses concise and natural."
+                    agent.instructions = "You are a helpful, conversational AI. Keep your responses concise and natural."
                     logger.info("Switched to Standard Mode.")
         except Exception as e:
             logger.error(f"Error handling UI data: {e}")
-
-    await agent.say("Hello! I'm online. How can I help you today?")
 
 
 if __name__ == "__main__":
