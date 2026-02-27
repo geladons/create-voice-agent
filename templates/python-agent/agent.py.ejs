@@ -92,14 +92,18 @@ async def entrypoint(ctx: JobContext):
     def on_data_received(data_packet: DataPacket):
         try:
             payload = json.loads(data_packet.data.decode("utf-8"))
-            logger.info(f"Received UI settings update: {payload}")
+            logger.info(f"Received UI update: {payload}")
+            
+            # Send confirmation log back to UI
+            import asyncio
+            msg = f"Settings updated (Reasoning: {payload.get('reasoning')}, Lang: {payload.get('language')})"
+            asyncio.create_task(ctx.room.local_participant.publish_data(msg.encode('utf-8')))
+
             if "reasoning" in payload:
                 if payload["reasoning"]:
-                    agent.instructions = "You are a highly logical reasoning AI. Think step-by-step before answering. Keep your spoken output natural but explain your logic."
-                    logger.info("Switched to Reasoning Mode.")
+                    agent.instructions = "You are a logical reasoning AI. Think step-by-step."
                 else:
-                    agent.instructions = "You are a helpful, conversational AI. Keep your responses concise and natural."
-                    logger.info("Switched to Standard Mode.")
+                    agent.instructions = "You are a conversational AI. Keep it brief."
         except Exception as e:
             logger.error(f"Error handling UI data: {e}")
 

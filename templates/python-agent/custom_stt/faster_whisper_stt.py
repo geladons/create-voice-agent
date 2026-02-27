@@ -38,11 +38,14 @@ class FasterWhisperSTT(stt.STT):
         )
         logger.info("Whisper model loaded successfully")
 
-    async def recognize(self, buffer, *, language=None, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+    async def _recognize_impl(self, buffer, *, language=None, conn_options=None):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None, self._transcribe, buffer, language or self.language
         )
+
+    def _stream_impl(self, *, language=None, conn_options=None):
+        raise NotImplementedError("FasterWhisperSTT does not support streaming")
 
     def _transcribe(self, buffer, language):
         # Convert LiveKit AudioFrame to numpy array
@@ -82,4 +85,3 @@ class FasterWhisperSTT(stt.STT):
                 )
             ],
         )
-

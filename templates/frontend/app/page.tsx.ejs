@@ -16,139 +16,74 @@ import {
 import "@livekit/components-styles";
 
 function VoiceAssistantUI() {
+  const room = useRoomContext();
   const { state, audioTrack } = useVoiceAssistant();
   const { localParticipant } = useLocalParticipant();
   const roomState = useConnectionState();
-  const room = useRoomContext();
 
   const [selectedModel, setSelectedModel] = useState("<%= modelName %>");
   const [temperature, setTemperature] = useState(0.7);
   const [topP, setTopP] = useState(0.9);
   const [topK, setTopK] = useState(40);
   const [reasoning, setReasoning] = useState(false);
+  
   const [language, setLanguage] = useState("<%= language %>");
   const [sttModel, setSttModel] = useState("base");
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
 
+  // Capture logs from Data Channel
   useEffect(() => {
     if (!room) return;
-    const roomAny = room as any;
-    const handleData = (payload: Uint8Array, participant?: any) => {
+    const handleData = (payload: Uint8Array) => {
       try {
         const msg = new TextDecoder().decode(payload);
-        setLogs((prev) => [...prev, `[Agent]: ${msg}`]);
+        setLogs(prev => [...prev, `[Agent]: ${msg}`]);
       } catch (e) {}
     };
-    const handleConnected = () => setLogs((prev) => [...prev, "Connected to room"]);
-    const handleDisconnected = () => setLogs((prev) => [...prev, "Disconnected"]);
-
-    roomAny.on("data_received", handleData);
-    roomAny.on("connected", handleConnected);
-    roomAny.on("disconnected", handleDisconnected);
-    return () => {
-      roomAny.off("data_received", handleData);
-      roomAny.off("connected", handleConnected);
-      roomAny.off("disconnected", handleDisconnected);
-    };
+    room.on("data_received", handleData);
+    room.on("connected", () => setLogs(prev => [...prev, "[System]: Connected to room"]));
+    room.on("disconnected", () => setLogs(prev => [...prev, "[System]: Disconnected"]));
+    return () => { room.off("data_received", handleData); };
   }, [room]);
 
+  // Publish settings safely
   useEffect(() => {
     if (localParticipant && roomState === ConnectionState.Connected) {
-      try {
-        const payload = JSON.stringify({ temperature, topP, topK, reasoning, language, sttModel });
-        localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true })
-          .catch(() => {});
-      } catch (e) {}
+      const timer = setTimeout(() => {
+        try {
+          const payload = JSON.stringify({ temperature, topP, topK, reasoning, language, sttModel });
+          localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true })
+            .catch(() => {});
+        } catch (e) {}
+      }, 500); // 500ms delay prevents PC manager race condition
+      return () => clearTimeout(timer);
     }
   }, [temperature, topP, topK, reasoning, language, sttModel, localParticipant, roomState]);
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-        gap: "1rem",
-        padding: "1rem 0",
-        textAlign: "left",
-      }}
-    >
-      <section
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: "12px",
-          padding: "1rem",
-          background: "#ffffff",
-        }}
-      >
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "1rem", padding: "1rem 0", textAlign: "left" }}>
+      <section style={{ border: "1px solid #e5e7eb", borderRadius: "12px", padding: "1rem", background: "#ffffff" }}>
         <h2 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Voice + Text</h2>
         <p style={{ marginTop: 0, color: "#374151" }}>Agent State: {state}</p>
-        <BarVisualizer
-          state={state}
-          barCount={5}
-          trackRef={audioTrack}
-          style={{ width: "100%", height: "80px" }}
-        />
-        <div
-          style={{
-            marginTop: "1rem",
-            border: "1px solid #e5e7eb",
-            borderRadius: "10px",
-            overflow: "hidden",
-            minHeight: "340px",
-          }}
-        >
+        <BarVisualizer state={state} barCount={5} trackRef={audioTrack} style={{ width: "100%", height: "80px" }} />
+        <div style={{ marginTop: "1rem", border: "1px solid #e5e7eb", borderRadius: "10px", overflow: "hidden", minHeight: "340px" }}>
           <Chat />
         </div>
       </section>
 
-      <aside
-        style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: "12px",
-          padding: "1rem",
-          background: "#f8fafc",
-          display: "flex",
-          flexDirection: "column",
-          gap: "1rem",
-        }}
-      >
+      <aside style={{ border: "1px solid #e5e7eb", borderRadius: "12px", padding: "1rem", background: "#f8fafc", display: "flex", flexDirection: "column", gap: "1rem" }}>
         <h3 style={{ margin: 0 }}>Control Panel</h3>
-
         <div>
           <h4 style={{ margin: "0 0 0.5rem 0" }}>System Status</h4>
           <p style={{ margin: 0, color: "#374151" }}>Connection State: {state}</p>
         </div>
-
+        
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          <h4 style={{ margin: 0 }}>Model Settings</h4>
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Select Model</span>
-            <select
-              value={selectedModel}
-              onChange={(event) => setSelectedModel(event.target.value)}
-              style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
-            >
-              <option value="<%= modelName %>"><%= modelName %></option>
-              <option value="qwen3-vl:2b">qwen3-vl:2b</option>
-              <option value="qwen3-vl:4b">qwen3-vl:4b</option>
-              <option value="llama3.2:3b">llama3.2:3b</option>
-            </select>
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Temperature: {temperature.toFixed(2)}</span>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.05"
-              value={temperature}
-              onChange={(event) => setTemperature(Number(event.target.value))}
-            />
-          </label>
+          <h4 style={{ margin: 0 }}>Agent Settings</h4>
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <span>Language</span>
-            <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ padding: "0.5rem", borderRadius: "8px" }}>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}>
               <option value="en">English</option>
               <option value="ru">Russian</option>
               <option value="de">German</option>
@@ -156,40 +91,48 @@ function VoiceAssistantUI() {
               <option value="es">Spanish</option>
             </select>
           </label>
+          
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <span>STT Model (Whisper)</span>
-            <select value={sttModel} onChange={(e) => setSttModel(e.target.value)} style={{ padding: "0.5rem", borderRadius: "8px" }}>
-              <option value="base">Base (Fastest)</option>
-              <option value="small">Small</option>
-              <option value="medium">Medium</option>
+            <select value={sttModel} onChange={(e) => setSttModel(e.target.value)} style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}>
+              <option value="base">Base (Fast)</option>
+              <option value="small">Small (Accurate)</option>
+              <option value="medium">Medium (Heavy)</option>
             </select>
           </label>
+
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Top-P: {topP.toFixed(2)}</span>
-            <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} />
+            <span>LLM Model</span>
+            <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}>
+              <option value="<%= modelName %>"><%= modelName %></option>
+              <option value="qwen3-vl:2b">qwen3-vl:2b</option>
+              <option value="llama3.2:3b">llama3.2:3b</option>
+            </select>
           </label>
+
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Top-K: {topK}</span>
-            <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} />
+            <span>Temperature: {temperature.toFixed(2)}</span>
+            <input type="range" min="0" max="2" step="0.05" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} />
           </label>
+          
           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
             <input type="checkbox" checked={reasoning} onChange={(e) => setReasoning(e.target.checked)} style={{ width: "18px", height: "18px" }} />
-            <strong>🧠 Reasoning Mode (Think step-by-step)</strong>
+            <strong>🧠 Reasoning Mode</strong>
           </label>
         </div>
 
-        <DisconnectButton>Disconnect</DisconnectButton>
-        <div style={{ marginTop: "1rem" }}>
-          <button onClick={() => setShowLogs(!showLogs)} style={{ width: "100%", padding: "0.5rem", borderRadius: "8px", background: "#e2e8f0", border: "none", cursor: "pointer" }}>
+        <div style={{ marginTop: "0.5rem" }}>
+          <button onClick={() => setShowLogs(!showLogs)} style={{ width: "100%", padding: "0.5rem", borderRadius: "8px", background: "#e2e8f0", border: "none", cursor: "pointer", fontWeight: "bold" }}>
             {showLogs ? "Hide Logs ▲" : "Show Logs ▼"}
           </button>
           {showLogs && (
-            <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#1e293b", color: "#10b981", borderRadius: "8px", height: "150px", overflowY: "auto", fontSize: "0.85rem", fontFamily: "monospace" }}>
-              {logs.map((log, i) => <div key={i}>{log}</div>)}
-              {logs.length === 0 && <span>No logs yet...</span>}
+            <div style={{ marginTop: "0.5rem", padding: "0.5rem", background: "#1e293b", color: "#10b981", borderRadius: "8px", height: "150px", overflowY: "auto", fontSize: "0.85rem", fontFamily: "monospace", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+              {logs.length === 0 ? <span>Waiting for events...</span> : logs.map((log, i) => <div key={i}>{log}</div>)}
             </div>
           )}
         </div>
+
+        <DisconnectButton>Disconnect</DisconnectButton>
       </aside>
     </div>
   );
