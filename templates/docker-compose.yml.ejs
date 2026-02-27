@@ -66,11 +66,9 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
 <% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/v1}
-<% } else if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
 <% } else { -%>
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
 <% } -%>
 <% if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
     extra_hosts:

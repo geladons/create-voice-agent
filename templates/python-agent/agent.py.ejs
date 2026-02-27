@@ -38,9 +38,10 @@ async def entrypoint(ctx: JobContext):
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
-    llm = openai_plugin.LLM.with_ollama(
+    llm = openai_plugin.LLM(
         model="<%= modelName %>",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434/v1"),
+        api_key="ollama"
     )
 
     voice_map = {
