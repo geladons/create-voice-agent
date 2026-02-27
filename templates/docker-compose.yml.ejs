@@ -1,7 +1,7 @@
 version: "3.9"
 
 services:
-<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+<% if (llmProvider === 'ollama') { -%>
   # ─── Ollama (Standalone) ─────────────────────────────────────────
   ollama:
     image: ollama/ollama
@@ -56,23 +56,17 @@ services:
     restart: unless-stopped
     depends_on:
       - livekit
-<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+<% if (llmProvider === 'ollama') { -%>
       - ollama
 <% } -%>
     environment:
       - LIVEKIT_URL=ws://livekit:7880
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+<% if (llmProvider === 'ollama') { -%>
       - OLLAMA_BASE_URL=http://ollama:11434
-<% } else if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
 <% } else { -%>
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-<% } -%>
-<% if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 <% } -%>
 
 <% if (includeFrontend) { -%>
@@ -91,14 +85,12 @@ services:
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - LIVEKIT_URL=ws://livekit:7880
       - NEXT_PUBLIC_LIVEKIT_URL=ws://localhost:7880
-<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+<% if (llmProvider === 'ollama') { -%>
       - OLLAMA_BASE_URL=http://ollama:11434
-<% } else if (llmProvider === 'ollama') { -%>
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
 <% } -%>
 <% } -%>
 
-<% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
+<% if (llmProvider === 'ollama') { -%>
 volumes:
   ollama_data:
 <% } -%>

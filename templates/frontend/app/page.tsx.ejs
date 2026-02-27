@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   BarVisualizer,
   Chat,
@@ -13,26 +20,59 @@ import {
 import { ConnectionState, RoomEvent } from "livekit-client";
 import "@livekit/components-styles";
 
+type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
+type ServiceStatus = "online" | "offline" | "checking";
+
 type AgentSettings = {
   model: string;
   temperature: number;
+  top_p: number;
+  top_k: number;
+  max_tokens: number;
+  reasoning_mode: boolean;
   language: string;
+};
+
+type ServiceHealth = {
+  ollama: ServiceStatus;
+  livekit: ServiceStatus;
+  agent: ServiceStatus;
 };
 
 type VoiceAssistantUIProps = {
   settings: AgentSettings;
   setSettings: Dispatch<SetStateAction<AgentSettings>>;
   availableModels: string[];
+  serviceHealth: ServiceHealth;
   onRoomStateChange: (state: ConnectionState) => void;
   onDisconnected: () => void;
+  onAgentHeartbeat: () => void;
 };
+
+const DEFAULT_SETTINGS: AgentSettings = {
+  model: "<%= modelName %>",
+  temperature: 0.7,
+  top_p: 0.9,
+  top_k: 40,
+  max_tokens: 512,
+  reasoning_mode: false,
+  language: "<%= language %>",
+};
+
+function statusColor(status: ServiceStatus) {
+  if (status === "online") return "#16a34a";
+  if (status === "checking") return "#f59e0b";
+  return "#dc2626";
+}
 
 function VoiceAssistantUI({
   settings,
   setSettings,
   availableModels,
+  serviceHealth,
   onRoomStateChange,
   onDisconnected,
+  onAgentHeartbeat,
 }: VoiceAssistantUIProps) {
   const room = useRoomContext();
   const { state, audioTrack } = useVoiceAssistant();
@@ -51,21 +91,31 @@ function VoiceAssistantUI({
       }
     };
 
+    const handleDataReceived = (payload: Uint8Array) => {
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(payload));
+        if (parsed && parsed.type === "heartbeat") {
+          onAgentHeartbeat();
+        }
+      } catch {
+        // Ignore non-JSON or unrelated payloads.
+      }
+    };
+
     handleConnectionStateChanged(room.state);
     room.on(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
+    room.on(RoomEvent.DataReceived, handleDataReceived);
 
     return () => {
       room.off(RoomEvent.ConnectionStateChanged, handleConnectionStateChanged);
+      room.off(RoomEvent.DataReceived, handleDataReceived);
     };
-  }, [onDisconnected, onRoomStateChange, room]);
+  }, [onAgentHeartbeat, onDisconnected, onRoomStateChange, room]);
 
   useEffect(() => {
-    if (room.state !== ConnectionState.Connected) {
-      return;
-    }
+    if (room.state !== ConnectionState.Connected) return;
 
     const payload = new TextEncoder().encode(JSON.stringify(settings));
-
     room.localParticipant
       .publishData(payload, { reliable: true, topic: "agent-settings" })
       .then(() => setSyncError(null))
@@ -78,9 +128,9 @@ function VoiceAssistantUI({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+        gridTemplateColumns: "minmax(0, 1fr) 340px",
         gap: "1rem",
-        padding: "1rem 0",
+        alignItems: "start",
         textAlign: "left",
       }}
     >
@@ -92,13 +142,13 @@ function VoiceAssistantUI({
           background: "#ffffff",
         }}
       >
-        <h2 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Voice + Text</h2>
+        <h2 style={{ marginTop: 0, marginBottom: "0.5rem" }}>Voice + Text Workspace</h2>
         <p style={{ marginTop: 0, color: "#374151" }}>Agent State: {state}</p>
         <BarVisualizer
           state={state}
-          barCount={5}
+          barCount={8}
           trackRef={audioTrack}
-          style={{ width: "100%", height: "80px" }}
+          style={{ width: "100%", height: "90px" }}
         />
         <div
           style={{
@@ -106,7 +156,7 @@ function VoiceAssistantUI({
             border: "1px solid #e5e7eb",
             borderRadius: "10px",
             overflow: "hidden",
-            minHeight: "340px",
+            minHeight: "380px",
           }}
         >
           <Chat />
@@ -115,7 +165,7 @@ function VoiceAssistantUI({
 
       <aside
         style={{
-          border: "1px solid #e5e7eb",
+          border: "1px solid #dbeafe",
           borderRadius: "12px",
           padding: "1rem",
           background: "#f8fafc",
@@ -124,22 +174,66 @@ function VoiceAssistantUI({
           gap: "1rem",
         }}
       >
-        <h3 style={{ margin: 0 }}>Control Panel</h3>
+        <h3 style={{ margin: 0 }}>Control Center</h3>
 
-        <div>
-          <h4 style={{ margin: "0 0 0.5rem 0" }}>System Status</h4>
-          <p style={{ margin: 0, color: "#374151" }}>Room State: {room.state}</p>
-          <p style={{ margin: "0.4rem 0 0 0", color: "#374151" }}>Agent State: {state}</p>
-        </div>
+        <section>
+          <h4 style={{ margin: "0 0 0.6rem 0" }}>Service Health</h4>
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            {[
+              { label: "Ollama", status: serviceHealth.ollama },
+              { label: "LiveKit", status: serviceHealth.livekit },
+              { label: "Agent", status: serviceHealth.agent },
+            ].map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "8px",
+                  padding: "0.55rem 0.7rem",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  background: "#ffffff",
+                }}
+              >
+                <span>{item.label}</span>
+                <span style={{ color: statusColor(item.status), fontWeight: 700 }}>
+                  {item.status.toUpperCase()}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-          <h4 style={{ margin: 0 }}>Model Settings</h4>
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        <section style={{ display: "grid", gap: "0.8rem" }}>
+          <h4 style={{ margin: 0 }}>Model Params</h4>
+
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span>Model</span>
+            <select
+              value={settings.model}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  model: event.target.value,
+                }))
+              }
+              style={{ padding: "0.55rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
+            >
+              {modelOptions.map((modelName) => (
+                <option key={modelName} value={modelName}>
+                  {modelName}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: "grid", gap: "0.35rem" }}>
             <span>Temperature: {settings.temperature.toFixed(2)}</span>
             <input
               type="range"
               min="0"
-              max="1"
+              max="2"
               step="0.01"
               value={settings.temperature}
               onChange={(event) =>
@@ -150,26 +244,60 @@ function VoiceAssistantUI({
               }
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Select Model</span>
-            <select
-              value={settings.model}
+
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span>Top-P: {settings.top_p.toFixed(2)}</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={settings.top_p}
               onChange={(event) =>
                 setSettings((current) => ({
                   ...current,
-                  model: event.target.value,
+                  top_p: Number(event.target.value),
                 }))
               }
-              style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
-            >
-              {modelOptions.map((modelName) => (
-                <option key={modelName} value={modelName}>
-                  {modelName}
-                </option>
-              ))}
-            </select>
+            />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span>Top-K: {settings.top_k}</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={settings.top_k}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  top_k: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span>Max Tokens</span>
+            <input
+              type="number"
+              min={64}
+              max={8192}
+              step={64}
+              value={settings.max_tokens}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  max_tokens: Number(event.target.value),
+                }))
+              }
+              style={{ padding: "0.55rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
+            />
+          </label>
+
+          <label style={{ display: "grid", gap: "0.35rem" }}>
             <span>Language</span>
             <select
               value={settings.language}
@@ -179,7 +307,7 @@ function VoiceAssistantUI({
                   language: event.target.value,
                 }))
               }
-              style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
+              style={{ padding: "0.55rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
             >
               <option value="en">EN</option>
               <option value="ru">RU</option>
@@ -188,8 +316,33 @@ function VoiceAssistantUI({
               <option value="es">ES</option>
             </select>
           </label>
+
+          <label
+            style={{
+              border: "1px solid #e2e8f0",
+              borderRadius: "8px",
+              padding: "0.65rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              background: "#ffffff",
+            }}
+          >
+            <span>Thinking Mode</span>
+            <input
+              type="checkbox"
+              checked={settings.reasoning_mode}
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  reasoning_mode: event.target.checked,
+                }))
+              }
+            />
+          </label>
+
           {syncError ? <p style={{ margin: 0, color: "#991b1b" }}>{syncError}</p> : null}
-        </div>
+        </section>
 
         <DisconnectButton>Disconnect</DisconnectButton>
       </aside>
@@ -200,47 +353,73 @@ function VoiceAssistantUI({
 export default function Home() {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [roomState, setRoomState] = useState<ConnectionState>(ConnectionState.Disconnected);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("idle");
   const [serverUrl, setServerUrl] = useState("");
   const [showSecurityWarning, setShowSecurityWarning] = useState(false);
-  const [settings, setSettings] = useState<AgentSettings>({
-    model: "<%= modelName %>",
-    temperature: 0.7,
-    language: "<%= language %>",
-  });
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [settings, setSettings] = useState<AgentSettings>({ ...DEFAULT_SETTINGS });
   const [availableModels, setAvailableModels] = useState<string[]>(["<%= modelName %>"]);
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealth>({
+    ollama: "checking",
+    livekit: "offline",
+    agent: "offline",
+  });
+  const [lastAgentHeartbeat, setLastAgentHeartbeat] = useState<number | null>(null);
+  const [roomSessionKey, setRoomSessionKey] = useState(0);
 
   const fallbackModels = useMemo(
     () => ["<%= modelName %>", "qwen3-vl:2b", "qwen3-vl:4b", "llama3.2:3b"],
     []
   );
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      let envUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-      if (!envUrl || envUrl.includes("127.0.0.1") || envUrl.includes("localhost")) {
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        envUrl = `${protocol}//${window.location.hostname}:7880`;
-      }
-      setServerUrl(envUrl);
-      setShowSecurityWarning(!Boolean(window.navigator.mediaDevices?.getUserMedia));
-    }
+  const resetSession = useCallback(() => {
+    setConnectionStatus("idle");
+    setToken(null);
+    setError(null);
+    setSettings({ ...DEFAULT_SETTINGS });
+    setLastAgentHeartbeat(null);
+    setRoomSessionKey((current) => current + 1);
+    setServiceHealth((current) => ({
+      ...current,
+      livekit: "offline",
+      agent: "offline",
+    }));
   }, []);
 
   useEffect(() => {
-    async function fetchToken() {
-      try {
-        const res = await fetch("/api/token?room=voice-room&username=user");
-        if (!res.ok) throw new Error("Failed to fetch token");
-        const data = await res.json();
-        setToken(data.token);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Unknown error");
-      }
+    if (typeof window === "undefined") return;
+
+    let envUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+    if (!envUrl || envUrl.includes("127.0.0.1") || envUrl.includes("localhost")) {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      envUrl = `${protocol}//${window.location.hostname}:7880`;
     }
-    fetchToken();
+    setServerUrl(envUrl);
+    setShowSecurityWarning(!Boolean(window.navigator.mediaDevices?.getUserMedia));
   }, []);
+
+  const requestToken = useCallback(async () => {
+    const res = await fetch("/api/token?room=voice-room&username=user");
+    if (!res.ok) throw new Error("Failed to fetch token");
+    const data = await res.json();
+    if (!data.token || typeof data.token !== "string") {
+      throw new Error("Token response is invalid");
+    }
+    return data.token;
+  }, []);
+
+  const beginConversation = useCallback(async () => {
+    setConnectionStatus("connecting");
+    setError(null);
+    try {
+      const nextToken = await requestToken();
+      setToken(nextToken);
+      setServiceHealth((current) => ({ ...current, livekit: "checking", agent: "offline" }));
+    } catch (err: unknown) {
+      setConnectionStatus("error");
+      setError(err instanceof Error ? err.message : "Unknown connection error");
+    }
+  }, [requestToken]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -259,7 +438,7 @@ export default function Home() {
           return;
         }
       } catch {
-        // Fall back to defaults if dynamic discovery fails.
+        // Use fallback list.
       }
 
       if (!isCancelled) {
@@ -280,79 +459,233 @@ export default function Home() {
   }, [fallbackModels, settings.model]);
 
   useEffect(() => {
-    if (roomState === ConnectionState.Disconnected) {
-      setConnected(false);
+    if (typeof window === "undefined") return;
+    const ollamaUrl = `http://${window.location.hostname}:11434/api/tags`;
+    let active = true;
+
+    const checkOllama = async () => {
+      setServiceHealth((current) => ({ ...current, ollama: "checking" }));
+      try {
+        const response = await fetch(ollamaUrl, { cache: "no-store" });
+        if (!active) return;
+        setServiceHealth((current) => ({
+          ...current,
+          ollama: response.ok ? "online" : "offline",
+        }));
+      } catch {
+        if (!active) return;
+        setServiceHealth((current) => ({ ...current, ollama: "offline" }));
+      }
+    };
+
+    checkOllama();
+    const timer = setInterval(checkOllama, 15000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const online =
+        typeof lastAgentHeartbeat === "number" && Date.now() - lastAgentHeartbeat < 25000;
+      setServiceHealth((current) => ({
+        ...current,
+        agent: online ? "online" : "offline",
+      }));
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [lastAgentHeartbeat]);
+
+  const handleRoomStateChange = useCallback((roomState: ConnectionState) => {
+    if (roomState === ConnectionState.Connected) {
+      setConnectionStatus("connected");
+      setServiceHealth((current) => ({ ...current, livekit: "online" }));
+      return;
     }
-  }, [roomState]);
+    if (roomState === ConnectionState.Disconnected) {
+      setServiceHealth((current) => ({ ...current, livekit: "offline", agent: "offline" }));
+      return;
+    }
+    setConnectionStatus("connecting");
+    setServiceHealth((current) => ({ ...current, livekit: "checking" }));
+  }, []);
 
-  const securityBanner = showSecurityWarning ? (
-    <div
-      style={{
-        background: "#fee2e2",
-        border: "1px solid #ef4444",
-        color: "#991b1b",
-        borderRadius: "10px",
-        padding: "0.85rem 1rem",
-        marginBottom: "1rem",
-        fontWeight: 600,
-      }}
-    >
-      ⚠️ Security Warning: microphone access is blocked because `navigator.mediaDevices` is not
-      available. Use HTTPS, Ngrok, or allow insecure origins for local testing.
-    </div>
-  ) : null;
+  const handleAgentHeartbeat = useCallback(() => {
+    setLastAgentHeartbeat(Date.now());
+    setServiceHealth((current) => ({ ...current, agent: "online" }));
+  }, []);
 
-  if (error) {
-    return (
-      <div style={{ padding: "2rem", textAlign: "center" }}>
-        {securityBanner}
-        <h1>Error</h1>
-        <p>{error}</p>
-      </div>
-    );
-  }
+  const buttonLabel =
+    connectionStatus === "connecting"
+      ? "Connecting..."
+      : connectionStatus === "error"
+        ? "Retry Conversation"
+        : "Start Conversation";
 
-  if (!token) {
-    return (
-      <div style={{ padding: "2rem", textAlign: "center" }}>
-        {securityBanner}
-        <p>Connecting to voice agent...</p>
-      </div>
-    );
-  }
+  const showActionButton = connectionStatus !== "connected";
 
   return (
-    <main style={{ padding: "2rem", textAlign: "center", maxWidth: "1200px", margin: "0 auto" }}>
-      <h1><%= projectName %></h1>
-      {securityBanner}
-      {(!connected || roomState === ConnectionState.Disconnected) && (
+    <main style={{ padding: "2rem", textAlign: "center", maxWidth: "1360px", margin: "0 auto" }}>
+      <h1 style={{ marginBottom: "0.5rem" }}><%= projectName %></h1>
+      <p style={{ color: "#475569", marginTop: 0 }}>
+        Status: <strong>{connectionStatus.toUpperCase()}</strong>
+      </p>
+
+      {showSecurityWarning ? (
+        <div
+          style={{
+            background: "#fee2e2",
+            border: "1px solid #ef4444",
+            color: "#991b1b",
+            borderRadius: "10px",
+            padding: "0.85rem 1rem",
+            marginBottom: "1rem",
+            fontWeight: 600,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "0.75rem",
+            textAlign: "left",
+          }}
+        >
+          <span>
+            ⚠️ Security Warning: microphone access is blocked because `navigator.mediaDevices` is
+            unavailable over insecure remote HTTP.
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowInstructions(true)}
+            style={{
+              borderRadius: "8px",
+              border: "1px solid #b91c1c",
+              background: "#ffffff",
+              color: "#b91c1c",
+              padding: "0.4rem 0.75rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Instructions
+          </button>
+        </div>
+      ) : null}
+
+      {showInstructions ? (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: "1rem",
+          }}
+          onClick={() => setShowInstructions(false)}
+        >
+          <div
+            style={{
+              maxWidth: "640px",
+              width: "100%",
+              textAlign: "left",
+              background: "#ffffff",
+              borderRadius: "12px",
+              border: "1px solid #e5e7eb",
+              padding: "1rem",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Remote HTTP Microphone Fix</h3>
+            <ol style={{ margin: "0.4rem 0 0 1rem", padding: 0 }}>
+              <li>Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`</li>
+              <li>Enable the flag and add your remote origin (e.g. `http://192.168.1.20:3000`)</li>
+              <li>Restart Chrome and reload this page</li>
+            </ol>
+            <p style={{ marginBottom: 0, color: "#475569" }}>
+              Prefer HTTPS (or Ngrok) for production deployments.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowInstructions(false)}
+              style={{
+                marginTop: "1rem",
+                borderRadius: "8px",
+                border: "1px solid #d1d5db",
+                background: "#f8fafc",
+                padding: "0.45rem 0.75rem",
+                cursor: "pointer",
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div
+          style={{
+            border: "1px solid #fca5a5",
+            background: "#fef2f2",
+            color: "#991b1b",
+            borderRadius: "10px",
+            padding: "0.8rem",
+            marginBottom: "1rem",
+            textAlign: "left",
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
+
+      {showActionButton ? (
         <button
           type="button"
-          onClick={() => setConnected(true)}
-          disabled={!serverUrl}
-          style={{ padding: "0.75rem 1.25rem", marginBottom: "1rem" }}
+          onClick={beginConversation}
+          disabled={connectionStatus === "connecting" || !serverUrl}
+          style={{
+            padding: "0.75rem 1.25rem",
+            marginBottom: "1rem",
+            borderRadius: "10px",
+            border: "1px solid #cbd5e1",
+            background: "#f8fafc",
+            cursor: connectionStatus === "connecting" ? "not-allowed" : "pointer",
+          }}
         >
-          Start Conversation
+          {buttonLabel}
         </button>
-      )}
-      {serverUrl ? (
-        <LiveKitRoom serverUrl={serverUrl} token={token} connect={connected} audio={true}>
+      ) : null}
+
+      {token && serverUrl ? (
+        <LiveKitRoom
+          key={roomSessionKey}
+          serverUrl={serverUrl}
+          token={token}
+          connect={connectionStatus === "connecting" || connectionStatus === "connected"}
+          audio={true}
+        >
           <VoiceAssistantUI
             settings={settings}
             setSettings={setSettings}
             availableModels={availableModels}
-            onRoomStateChange={setRoomState}
-            onDisconnected={() => {
-              setConnected(false);
-              setRoomState(ConnectionState.Disconnected);
-            }}
+            serviceHealth={serviceHealth}
+            onRoomStateChange={handleRoomStateChange}
+            onDisconnected={resetSession}
+            onAgentHeartbeat={handleAgentHeartbeat}
           />
           <RoomAudioRenderer />
         </LiveKitRoom>
       ) : (
-        <p>Detecting LiveKit server URL...</p>
+        <p style={{ color: "#64748b" }}>
+          {connectionStatus === "connecting" ? "Preparing secure room token..." : "Ready to connect."}
+        </p>
       )}
-      <p style={{ color: "#475569", marginTop: "0.75rem" }}>Connection State: {roomState}</p>
     </main>
   );
 }
