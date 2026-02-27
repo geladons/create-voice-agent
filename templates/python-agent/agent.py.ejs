@@ -42,8 +42,9 @@ async def entrypoint(ctx: JobContext):
         model="<%= modelName %>",
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
     )
-
-    # Map languages to default Piper voices
+    
+    # ─── Automatic Voice Mapping ──────────────────────────────────
+    import os, urllib.request
     voice_map = {
         "en": "en_US-lessac-medium",
         "ru": "ru_RU-dmitri-medium",
@@ -51,10 +52,22 @@ async def entrypoint(ctx: JobContext):
         "fr": "fr_FR-upmc-medium",
         "es": "es_ES-carlfm-medium"
     }
-    tts_model = voice_map.get("<%= language %>", "en_US-lessac-medium")
-    tts_engine = PiperTTSPlugin(model=f"/app/models/{tts_model}.onnx")
+    lang = "<%= language %>"
+    tts_model = voice_map.get(lang, "en_US-lessac-medium")
+    
+    onnx_path = f"/app/models/{tts_model}.onnx"
+    json_path = f"/app/models/{tts_model}.onnx.json"
+    
+    # Ensure model exists or download it automatically
+    if not os.path.exists(onnx_path):
+        os.makedirs("/app/models", exist_ok=True)
+        logger.info(f"Language auto-detected: {lang}. Downloading {tts_model}...")
+        hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{tts_model.split('-')[0]}/{tts_model.split('-')[0]}_{tts_model.split('-')[1]}/{tts_model.split('-')[2]}/{tts_model}"
+        urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
+        urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
 
-    stt_engine = FasterWhisperSTT(model="base", language="<%= language %>")
+    tts_engine = PiperTTSPlugin(model=onnx_path)
+    stt_engine = FasterWhisperSTT(model="base", language=lang)
 <% } -%>
 
     agent = VoicePipelineAgent(

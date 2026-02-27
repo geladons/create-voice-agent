@@ -63,16 +63,8 @@ export async function scaffold({
   fs.mkdirSync(projectDir, { recursive: true });
 
   const totalCpus = os.cpus().length;
-  let cpuLimit;
-  if (totalCpus <= 4) {
-    cpuLimit = Math.max(1, totalCpus - 1);
-  } else if (totalCpus <= 8) {
-    cpuLimit = totalCpus - 2;
-  } else {
-    cpuLimit = 10;
-  }
-  // Ensure it's formatted as a string for Docker Compose (e.g., '6.0')
-  const formattedCpuLimit = cpuLimit.toFixed(1);
+  const calculatedLimit = totalCpus >= 12 ? 10 : totalCpus * 0.75;
+  const cpuLimit = calculatedLimit.toFixed(1);
 
   const data = {
     projectName,
@@ -83,7 +75,7 @@ export async function scaffold({
     language,
     ollamaIp,
     hostIp,
-    cpuLimit: formattedCpuLimit,
+    cpuLimit,
   };
 
   // Render root-level templates
