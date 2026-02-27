@@ -42,7 +42,18 @@ async def entrypoint(ctx: JobContext):
         model="<%= modelName %>",
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434"),
     )
-    tts_engine = PiperTTSPlugin(model="/app/models/en_US-lessac-medium.onnx")
+
+    # Map languages to default Piper voices
+    voice_map = {
+        "en": "en_US-lessac-medium",
+        "ru": "ru_RU-dmitri-medium",
+        "de": "de_DE-thorsten-medium",
+        "fr": "fr_FR-upmc-medium",
+        "es": "es_ES-carlfm-medium"
+    }
+    tts_model = voice_map.get("<%= language %>", "en_US-lessac-medium")
+    tts_engine = PiperTTSPlugin(model=f"/app/models/{tts_model}.onnx")
+
     stt_engine = FasterWhisperSTT(model="base", language="<%= language %>")
 <% } -%>
 

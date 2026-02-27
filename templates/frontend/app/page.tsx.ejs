@@ -14,7 +14,7 @@ import "@livekit/components-styles";
 function VoiceAssistantUI() {
   const { state, audioTrack } = useVoiceAssistant();
   const [temperature, setTemperature] = useState(0.7);
-  const [selectedModel, setSelectedModel] = useState("qwen3-vl:2b");
+  const [selectedModel, setSelectedModel] = useState("<%= modelName %>");
 
   return (
     <div
@@ -93,9 +93,9 @@ function VoiceAssistantUI() {
               onChange={(event) => setSelectedModel(event.target.value)}
               style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}
             >
-              <option value="qwen3-vl:2b">qwen3-vl:2b</option>
-              <option value="qwen3-vl:4b">qwen3-vl:4b</option>
-              <option value="llama3.2:3b">llama3.2:3b</option>
+              <option value="<%= modelName %>"><%= modelName %></option>
+              <option value="qwen3-vl:2b">qwen3-vl:2b (Fastest)</option>
+              <option value="llama3.2:3b">llama3.2:3b (Smart)</option>
             </select>
           </label>
         </div>

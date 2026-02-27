@@ -325,7 +325,7 @@ program
 
     hostIp = await input({
       message:
-        '🌐 Enter the IP address where this agent will run (Press Enter to use detected IP):',
+        '🌐 Enter the IP address (⚠️ If on a remote VPS, enter your PUBLIC IP! If at home, press Enter for detected LAN IP):',
       default: getLocalIp(),
     });
 
