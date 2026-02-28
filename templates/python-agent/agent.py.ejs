@@ -99,9 +99,12 @@ def _build_agent_instructions(reasoning: bool, language: str) -> str:
         if reasoning
         else "Keep responses concise and practical."
     )
+    language_rule = (
+        f"Reply only in {target_language}. Do not switch to another language unless the user explicitly asks you to."
+    )
     return (
         f"You are a helpful real-time voice assistant. {style} "
-        f"Always respond in {target_language}."
+        f"{language_rule}"
     )
 
 
@@ -221,91 +224,11 @@ async def entrypoint(ctx: JobContext):
     }
 
     oai_client = None
-
-<% if (llmProvider === 'openai') { -%>
-    llm = openai_plugin.LLM(model=settings["model"])
-    tts_engine = openai_plugin.TTS(voice="alloy")
-    stt_engine = deepgram.STT()
-<% } else { -%>
-    import httpx
-    llm_timeout_sec = _env_float("OLLAMA_LLM_TIMEOUT_SEC", 120.0)
-
-    # Keep a long timeout so Ollama has enough time to load model weights.
-    oai_client = openai.AsyncOpenAI(
-        api_key="ollama",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
-        max_retries=0,
-        http_client=httpx.AsyncClient(
-            timeout=httpx.Timeout(llm_timeout_sec),
-            follow_redirects=True,
-        ),
-    )
-
-    # Pass the correctly formatted client to LiveKit
-    llm = openai_plugin.LLM(
-        model=settings["model"],
-        client=oai_client
-    )
-    _apply_ollama_runtime_settings(llm, settings)
-
-    tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
-    piper_ort_intra_threads = _env_int("PIPER_ORT_INTRA_THREADS", 1)
-    piper_ort_inter_threads = _env_int("PIPER_ORT_INTER_THREADS", 1)
-
-    try:
-        onnx_path = _ensure_piper_voice_model(tts_model)
-    except Exception as exc:
-        logger.warning("Failed to prepare Piper voice %s: %s. Falling back to English.", tts_model, exc)
-        settings["language"] = "en"
-        onnx_path = _ensure_piper_voice_model("en_US-lessac-medium")
-
-    tts_engine = PiperTTSPlugin(
-        model=onnx_path,
-        ort_intra_threads=piper_ort_intra_threads,
-        ort_inter_threads=piper_ort_inter_threads,
-    )
-    stt_engine = FasterWhisperSTT(
-        model=settings["sttModel"],
-        language=settings["language"],
-    )
+    runtime_ready = False
+    first_settings_received = asyncio.Event()
+<% if (llmProvider === 'ollama') { -%>
     warmup_enabled = str(os.getenv("OLLAMA_WARMUP", "1")).strip().lower() in {"1", "true", "yes", "on"}
-    if warmup_enabled:
-        asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
 <% } -%>
-
-    agent = Agent(
-        instructions=_build_agent_instructions(settings["reasoning"], settings["language"])
-    )
-    session = AgentSession(
-        vad=silero.VAD.load(),
-        stt=stt_engine,
-        llm=llm,
-        tts=tts_engine,
-    )
-
-    @session.on("user_input_transcribed")
-    def on_user_input_transcribed(ev):
-        if not getattr(ev, "is_final", False):
-            return
-        transcript = (getattr(ev, "transcript", "") or "").strip()
-        if transcript:
-            asyncio.create_task(_publish_chat_message(ctx, transcript))
-
-    @session.on("conversation_item_added")
-    def on_conversation_item_added(ev):
-        item = getattr(ev, "item", None)
-        if getattr(item, "role", None) != "assistant":
-            return
-        response_text = _extract_text_content(item)
-        if response_text:
-            asyncio.create_task(_publish_chat_message(ctx, response_text))
-
-    room_disconnected = asyncio.Event()
-
-    @ctx.room.on("disconnected")
-    def on_room_disconnected(reason):
-        logger.info("Room disconnected: %s", reason)
-        room_disconnected.set()
 
     @ctx.room.on("data_received")
     def on_data_received(data_packet: DataPacket):
@@ -313,6 +236,10 @@ async def entrypoint(ctx: JobContext):
             payload = json.loads(data_packet.data.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("payload must be a JSON object")
+            first_settings_received.set()
+
+            sender = getattr(getattr(data_packet, "participant", None), "identity", "unknown")
+            logger.info("Received UI settings payload from %s: %s", sender, payload)
 
             prev_language = settings["language"]
             prev_model = settings["model"]
@@ -340,6 +267,10 @@ async def entrypoint(ctx: JobContext):
                 if candidate_stt_model:
                     settings["sttModel"] = candidate_stt_model
 <% } -%>
+
+            if not runtime_ready:
+                logger.info("Queued UI settings before pipeline initialization is complete")
+                return
 
 <% if (llmProvider === 'ollama') { -%>
             _apply_ollama_runtime_settings(llm, settings)
@@ -392,10 +323,110 @@ async def entrypoint(ctx: JobContext):
 <% } -%>
                 f")"
             )
+            logger.info(msg)
             asyncio.create_task(_publish_ui_log(ctx, msg))
         except Exception as exc:
             logger.warning("Error handling UI settings update: %s", exc)
             asyncio.create_task(_publish_ui_log(ctx, f"Settings update rejected: {exc}"))
+
+<% if (llmProvider === 'openai') { -%>
+    llm = openai_plugin.LLM(model=settings["model"])
+    tts_engine = openai_plugin.TTS(voice="alloy")
+    stt_engine = deepgram.STT()
+<% } else { -%>
+    import httpx
+    llm_timeout_sec = _env_float("OLLAMA_LLM_TIMEOUT_SEC", 120.0)
+
+    # Keep a long timeout so Ollama has enough time to load model weights.
+    oai_client = openai.AsyncOpenAI(
+        api_key="ollama",
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+        max_retries=0,
+        http_client=httpx.AsyncClient(
+            timeout=httpx.Timeout(llm_timeout_sec),
+            follow_redirects=True,
+        ),
+    )
+
+    # Pass the correctly formatted client to LiveKit
+    llm = openai_plugin.LLM(
+        model=settings["model"],
+        client=oai_client
+    )
+    _apply_ollama_runtime_settings(llm, settings)
+
+    tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
+    piper_ort_intra_threads = _env_int("PIPER_ORT_INTRA_THREADS", 1)
+    piper_ort_inter_threads = _env_int("PIPER_ORT_INTER_THREADS", 1)
+
+    try:
+        onnx_path = _ensure_piper_voice_model(tts_model)
+    except Exception as exc:
+        logger.warning("Failed to prepare Piper voice %s: %s. Falling back to English.", tts_model, exc)
+        settings["language"] = "en"
+        onnx_path = _ensure_piper_voice_model("en_US-lessac-medium")
+
+    tts_engine = PiperTTSPlugin(
+        model=onnx_path,
+        ort_intra_threads=piper_ort_intra_threads,
+        ort_inter_threads=piper_ort_inter_threads,
+    )
+    stt_engine = FasterWhisperSTT(
+        model=settings["sttModel"],
+        language=settings["language"],
+    )
+    if warmup_enabled:
+        asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
+<% } -%>
+
+    agent = Agent(
+        instructions=_build_agent_instructions(settings["reasoning"], settings["language"])
+    )
+    session = AgentSession(
+        vad=silero.VAD.load(),
+        stt=stt_engine,
+        llm=llm,
+        tts=tts_engine,
+    )
+
+    @session.on("user_input_transcribed")
+    def on_user_input_transcribed(ev):
+        if not getattr(ev, "is_final", False):
+            return
+        transcript = (getattr(ev, "transcript", "") or "").strip()
+        if transcript:
+            asyncio.create_task(_publish_chat_message(ctx, transcript))
+
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev):
+        item = getattr(ev, "item", None)
+        if getattr(item, "role", None) != "assistant":
+            return
+        response_text = _extract_text_content(item)
+        if response_text:
+            asyncio.create_task(_publish_chat_message(ctx, response_text))
+
+    room_disconnected = asyncio.Event()
+
+    @ctx.room.on("disconnected")
+    def on_room_disconnected(reason):
+        logger.info("Room disconnected: %s", reason)
+        room_disconnected.set()
+
+    runtime_ready = True
+    logger.info(
+        "Pipeline initialized with settings: model=%s, lang=%s, reasoning=%s",
+        settings["model"],
+        settings["language"],
+        settings["reasoning"],
+    )
+    initial_settings_wait_sec = _env_float("INITIAL_SETTINGS_WAIT_SEC", 3.0)
+    if initial_settings_wait_sec > 0:
+        try:
+            await asyncio.wait_for(first_settings_received.wait(), timeout=initial_settings_wait_sec)
+            logger.info("Initial UI settings packet received before session start")
+        except asyncio.TimeoutError:
+            logger.info("No initial UI settings received within %.1fs; using defaults", initial_settings_wait_sec)
 
     try:
         await session.start(agent=agent, room=ctx.room)
