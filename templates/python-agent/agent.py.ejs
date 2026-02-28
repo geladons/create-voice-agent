@@ -19,6 +19,7 @@ from custom_tts.piper_tts import PiperTTSPlugin
 
 logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
+CHAT_TOPIC = "lk.chat"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -64,6 +65,35 @@ async def _publish_ui_log(ctx: JobContext, message: str) -> None:
         logger.debug("Failed to publish UI log: %s", exc)
 
 
+async def _publish_chat_message(ctx: JobContext, text: str) -> None:
+    message = text.strip()
+    if not message:
+        return
+
+    try:
+        await ctx.room.local_participant.send_text(message, topic=CHAT_TOPIC)
+    except Exception as exc:
+        logger.debug("Failed to publish chat message: %s", exc)
+
+
+def _extract_text_content(item: object) -> str:
+    text_content = getattr(item, "text_content", None)
+    if isinstance(text_content, str):
+        return text_content.strip()
+
+    content = getattr(item, "content", None)
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            stripped = part.strip()
+            if stripped:
+                parts.append(stripped)
+    return "\n".join(parts)
+
+
 <% if (llmProvider === 'ollama') { -%>
 def _build_piper_url(tts_model: str) -> str:
     parts = tts_model.split("-")
@@ -97,11 +127,18 @@ async def entrypoint(ctx: JobContext):
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
-    # Initialize the official OpenAI client with a 120s timeout for slow CPU inference
+    import httpx
+    llm_timeout_sec = _env_float("OLLAMA_LLM_TIMEOUT_SEC", 120.0)
+
+    # Keep a long timeout so Ollama has enough time to load model weights.
     oai_client = openai.AsyncOpenAI(
         api_key="ollama",
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
-        timeout=120.0
+        max_retries=0,
+        http_client=httpx.AsyncClient(
+            timeout=httpx.Timeout(llm_timeout_sec),
+            follow_redirects=True,
+        ),
     )
 
     # Pass the correctly formatted client to LiveKit
@@ -154,6 +191,24 @@ async def entrypoint(ctx: JobContext):
         llm=llm,
         tts=tts_engine,
     )
+
+    @session.on("user_input_transcribed")
+    def on_user_input_transcribed(ev):
+        if not getattr(ev, "is_final", False):
+            return
+        transcript = (getattr(ev, "transcript", "") or "").strip()
+        if transcript:
+            asyncio.create_task(_publish_chat_message(ctx, transcript))
+
+    @session.on("conversation_item_added")
+    def on_conversation_item_added(ev):
+        item = getattr(ev, "item", None)
+        if getattr(item, "role", None) != "assistant":
+            return
+        response_text = _extract_text_content(item)
+        if response_text:
+            asyncio.create_task(_publish_chat_message(ctx, response_text))
+
     room_disconnected = asyncio.Event()
 
     @ctx.room.on("disconnected")

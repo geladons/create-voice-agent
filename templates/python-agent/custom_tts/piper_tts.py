@@ -9,10 +9,10 @@ import numpy as np
 import asyncio
 import logging
 import onnxruntime as ort
+import uuid
 
 from livekit.agents import tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit import rtc
 from piper import PiperVoice, SynthesisConfig
 from piper.config import PiperConfig
 
@@ -88,8 +88,16 @@ class PiperStream(tts.ChunkedStream):
         super().__init__(tts=plugin, input_text=text, conn_options=conn_options)
         self.plugin = plugin
 
-    async def _run(self):
+    async def _run(self, output_emitter, *args, **kwargs):
         try:
+            output_emitter.initialize(
+                request_id=f"piper-{uuid.uuid4().hex}",
+                sample_rate=22050,
+                num_channels=1,
+                mime_type="audio/pcm",
+                frame_size_ms=50,
+            )
+
             config = SynthesisConfig(
                 volume=self.plugin.volume,
                 length_scale=self.plugin.speed,
@@ -102,36 +110,15 @@ class PiperStream(tts.ChunkedStream):
             chunks = await loop.run_in_executor(None, self._synthesize_chunks, config)
 
             for chunk in chunks:
-                frame = rtc.AudioFrame(
-                    data=chunk,
-                    sample_rate=22050,
-                    num_channels=1,
-                    samples_per_channel=len(chunk) // 2,
-                )
-                self._event_ch.send_nowait(
-                    tts.SynthesizedAudio(
-                        request_id="1",
-                        segment_id="1",
-                        frame=frame,
-                    )
-                )
+                output_emitter.push(chunk)
+
+            output_emitter.flush()
 
         except Exception as e:
             logger.error(f"Piper TTS synthesis failed: {e}")
             silence = np.zeros(22050, dtype=np.int16).tobytes()
-            frame = rtc.AudioFrame(
-                data=silence,
-                sample_rate=22050,
-                num_channels=1,
-                samples_per_channel=22050,
-            )
-            self._event_ch.send_nowait(
-                tts.SynthesizedAudio(
-                    request_id="1",
-                    segment_id="1",
-                    frame=frame,
-                )
-            )
+            output_emitter.push(silence)
+            output_emitter.flush()
 
     def _synthesize_chunks(self, config):
         chunks = []
