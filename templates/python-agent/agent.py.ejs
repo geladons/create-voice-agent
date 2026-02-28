@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import urllib.request
+import openai
 
 from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import silero
@@ -11,8 +12,6 @@ from livekit.rtc import DataPacket
 from livekit.plugins import deepgram
 from livekit.plugins import openai as openai_plugin
 <% } else { -%>
-import httpx
-import openai
 from livekit.plugins import openai as openai_plugin
 from custom_stt.faster_whisper_stt import FasterWhisperSTT
 from custom_tts.piper_tts import PiperTTSPlugin
@@ -55,26 +54,24 @@ async def entrypoint(ctx: JobContext):
         "language": "<%= language %>",
     }
 
-    http_client = None
-    openai_client = None
+    oai_client = None
 
 <% if (llmProvider === 'openai') { -%>
     llm = openai_plugin.LLM(model="gpt-4o-mini")
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
-    # 120s timeout prevents false API timeouts during slow CPU inference.
-    http_client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
-    openai_client = openai.AsyncOpenAI(
+    # Initialize the official OpenAI client with a 120s timeout for slow CPU inference
+    oai_client = openai.AsyncOpenAI(
         api_key="ollama",
         base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
-        http_client=http_client,
+        timeout=120.0
     )
+
+    # Pass the correctly formatted client to LiveKit
     llm = openai_plugin.LLM(
         model="<%= modelName %>",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
-        api_key="ollama",
-        client=openai_client,
+        client=oai_client
     )
 
     voice_map = {
@@ -153,10 +150,8 @@ async def entrypoint(ctx: JobContext):
     try:
         await session.start(agent=agent, room=ctx.room)
     finally:
-        if openai_client is not None:
-            await openai_client.close()
-        elif http_client is not None:
-            await http_client.aclose()
+        if oai_client is not None:
+            await oai_client.close()
 
 
 if __name__ == "__main__":
