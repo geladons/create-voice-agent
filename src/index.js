@@ -181,7 +181,7 @@ program
 
     let llmProvider = 'ollama';
     let deploymentType = null;
-    let modelName = 'qwen3-vl:2b';
+    let modelName = 'qwen2.5:1.5b';
     let language = 'en';
     let includeFrontend = true;
     let shouldAutoStart = false;
@@ -218,10 +218,10 @@ program
         // Re-fetch models if IP changed
         const fetchIp = ollamaIp === 'localhost' ? '127.0.0.1' : ollamaIp;
         ollamaModels = await fetchOllamaModels(fetchIp);
-        modelName = await promptModelName(ollamaModels, 'qwen3-vl:2b');
+        modelName = await promptModelName(ollamaModels, 'qwen2.5:1.5b');
       } else {
-        modelName = 'qwen3-vl:2b';
-        console.log(`\n📦 Standalone mode: will use model "${modelName}" (fastest CPU model)`);
+        modelName = 'qwen2.5:1.5b';
+        console.log(`\n📦 Standalone mode: will use model "${modelName}" (low-latency CPU default)`);
       }
     }
 
@@ -260,11 +260,11 @@ program
         if (deploymentType === 'existing') {
           const fetchIp = ollamaIp === 'localhost' ? '127.0.0.1' : ollamaIp;
           ollamaModels = await fetchOllamaModels(fetchIp);
-          modelName = await promptModelName(ollamaModels, 'qwen3-vl:4b');
+          modelName = await promptModelName(ollamaModels, 'qwen2.5:1.5b');
         } else {
           modelName = await input({
             message: 'Enter Ollama model name:',
-            default: 'qwen3-vl:4b',
+            default: 'qwen2.5:1.5b',
           });
         }
 
@@ -319,7 +319,7 @@ program
       });
 
       // Fast mode uses defaults for model, language, no auto-start
-      modelName = deploymentType === 'standalone' ? 'qwen3-vl:2b' : 'qwen3-vl:4b';
+      modelName = deploymentType === 'standalone' ? 'qwen2.5:1.5b' : 'qwen2.5:1.5b';
       shouldAutoStart = false;
     }
 

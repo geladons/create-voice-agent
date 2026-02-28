@@ -33,7 +33,7 @@ my-voice-app/
 ├── python-agent/
 │   ├── Dockerfile              # Non-root user (EACCES fix)
 │   ├── requirements.txt        # livekit-agents + plugins
-│   └── agent.py                # VoicePipelineAgent (VAD→STT→LLM→TTS)
+│   └── agent.py                # AgentSession pipeline (VAD→STT→LLM→TTS)
 └── frontend/                   # (if selected)
     ├── Dockerfile
     ├── package.json            # includes livekit-server-sdk
@@ -70,4 +70,3 @@ node bin/create-voice-agent.js my-test-project
 ## License
 
 MIT
-

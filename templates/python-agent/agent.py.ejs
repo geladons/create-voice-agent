@@ -20,6 +20,13 @@ from custom_tts.piper_tts import PiperTTSPlugin
 logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
 CHAT_TOPIC = "lk.chat"
+LANGUAGE_NAMES = {
+    "en": "English",
+    "ru": "Russian",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+}
 
 
 def _env_float(name: str, default: float) -> float:
@@ -56,6 +63,46 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
         return default
 
     return value
+
+
+def _normalize_language(language_code: str) -> str:
+    normalized = (language_code or "").strip().lower()
+    if normalized in LANGUAGE_NAMES:
+        return normalized
+    if "-" in normalized:
+        short = normalized.split("-", 1)[0]
+        if short in LANGUAGE_NAMES:
+            return short
+    return "en"
+
+
+def _clamp_float(value, minimum: float, maximum: float, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))
+
+
+def _clamp_int(value, minimum: int, maximum: int, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))
+
+
+def _build_agent_instructions(reasoning: bool, language: str) -> str:
+    target_language = LANGUAGE_NAMES.get(language, "English")
+    style = (
+        "Reason step-by-step before answering, but provide only the final concise answer unless asked for details."
+        if reasoning
+        else "Keep responses concise and practical."
+    )
+    return (
+        f"You are a helpful real-time voice assistant. {style} "
+        f"Always respond in {target_language}."
+    )
 
 
 async def _publish_ui_log(ctx: JobContext, message: str) -> None:
@@ -95,6 +142,15 @@ def _extract_text_content(item: object) -> str:
 
 
 <% if (llmProvider === 'ollama') { -%>
+VOICE_MODEL_BY_LANGUAGE = {
+    "en": "en_US-lessac-medium",
+    "ru": "ru_RU-dmitri-medium",
+    "de": "de_DE-thorsten-medium",
+    "fr": "fr_FR-upmc-medium",
+    "es": "es_ES-carlfm-medium",
+}
+
+
 def _build_piper_url(tts_model: str) -> str:
     parts = tts_model.split("-")
     if len(parts) != 3:
@@ -102,6 +158,44 @@ def _build_piper_url(tts_model: str) -> str:
 
     lang_dir = parts[0].split("_")[0]
     return f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{lang_dir}/{parts[0]}/{parts[1]}/{parts[2]}/{tts_model}"
+
+
+def _ensure_piper_voice_model(tts_model: str) -> str:
+    onnx_path = f"/app/models/{tts_model}.onnx"
+    json_path = f"/app/models/{tts_model}.onnx.json"
+    if os.path.exists(onnx_path):
+        return onnx_path
+
+    os.makedirs("/app/models", exist_ok=True)
+    hf_url = _build_piper_url(tts_model)
+    logger.info("Downloading Piper voice: %s", tts_model)
+    urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
+    urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
+    logger.info("Piper voice downloaded: %s", tts_model)
+    return onnx_path
+
+
+def _apply_ollama_runtime_settings(llm, settings: dict) -> None:
+    opts = getattr(llm, "_opts", None)
+    if opts is None:
+        return
+
+    opts.model = settings["model"]
+    opts.temperature = settings["temperature"]
+    opts.top_p = settings["topP"]
+    opts.extra_body = {"options": {"top_k": settings["topK"]}}
+
+
+async def _warmup_ollama_model(client: openai.AsyncOpenAI, model_name: str) -> None:
+    try:
+        await client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "system", "content": "Warmup"}],
+            max_tokens=1,
+        )
+        logger.info("Ollama warmup completed for model: %s", model_name)
+    except Exception as exc:
+        logger.debug("Ollama warmup skipped/failed for %s: %s", model_name, exc)
 <% } -%>
 
 
@@ -113,17 +207,23 @@ async def entrypoint(ctx: JobContext):
     logger.info("Participant joined: %s", participant.identity)
 
     settings = {
-        "temperature": 0.7,
+        "temperature": 0.4,
         "topP": 0.9,
         "topK": 40,
         "reasoning": False,
-        "language": "<%= language %>",
+        "language": _normalize_language("<%= language %>"),
+<% if (llmProvider === 'openai') { -%>
+        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+<% } else { -%>
+        "model": "<%= modelName %>",
+        "sttModel": os.getenv("FASTER_WHISPER_MODEL", "base"),
+<% } -%>
     }
 
     oai_client = None
 
 <% if (llmProvider === 'openai') { -%>
-    llm = openai_plugin.LLM(model="gpt-4o-mini")
+    llm = openai_plugin.LLM(model=settings["model"])
     tts_engine = openai_plugin.TTS(voice="alloy")
     stt_engine = deepgram.STT()
 <% } else { -%>
@@ -143,47 +243,38 @@ async def entrypoint(ctx: JobContext):
 
     # Pass the correctly formatted client to LiveKit
     llm = openai_plugin.LLM(
-        model="<%= modelName %>",
+        model=settings["model"],
         client=oai_client
     )
+    _apply_ollama_runtime_settings(llm, settings)
 
-    voice_map = {
-        "en": "en_US-lessac-medium",
-        "ru": "ru_RU-dmitri-medium",
-        "de": "de_DE-thorsten-medium",
-        "fr": "fr_FR-upmc-medium",
-        "es": "es_ES-carlfm-medium",
-    }
-    language = "<%= language %>"
-    settings["language"] = language
-
-    tts_model = voice_map.get(language, "en_US-lessac-medium")
-    onnx_path = f"/app/models/{tts_model}.onnx"
-    json_path = f"/app/models/{tts_model}.onnx.json"
+    tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
     piper_ort_intra_threads = _env_int("PIPER_ORT_INTRA_THREADS", 1)
     piper_ort_inter_threads = _env_int("PIPER_ORT_INTER_THREADS", 1)
 
-    if not os.path.exists(onnx_path):
-        os.makedirs("/app/models", exist_ok=True)
-        try:
-            hf_url = _build_piper_url(tts_model)
-            logger.info("Downloading Piper voice: %s", tts_model)
-            urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
-            urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
-            logger.info("Piper voice downloaded.")
-        except Exception as exc:
-            logger.error("Failed to download TTS model: %s", exc)
+    try:
+        onnx_path = _ensure_piper_voice_model(tts_model)
+    except Exception as exc:
+        logger.warning("Failed to prepare Piper voice %s: %s. Falling back to English.", tts_model, exc)
+        settings["language"] = "en"
+        onnx_path = _ensure_piper_voice_model("en_US-lessac-medium")
 
     tts_engine = PiperTTSPlugin(
         model=onnx_path,
         ort_intra_threads=piper_ort_intra_threads,
         ort_inter_threads=piper_ort_inter_threads,
     )
-    stt_engine = FasterWhisperSTT(model="base", language=language)
+    stt_engine = FasterWhisperSTT(
+        model=settings["sttModel"],
+        language=settings["language"],
+    )
+    warmup_enabled = str(os.getenv("OLLAMA_WARMUP", "1")).strip().lower() in {"1", "true", "yes", "on"}
+    if warmup_enabled:
+        asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
 <% } -%>
 
     agent = Agent(
-        instructions="You are a helpful, conversational AI. Keep your responses concise."
+        instructions=_build_agent_instructions(settings["reasoning"], settings["language"])
     )
     session = AgentSession(
         vad=silero.VAD.load(),
@@ -223,27 +314,83 @@ async def entrypoint(ctx: JobContext):
             if not isinstance(payload, dict):
                 raise ValueError("payload must be a JSON object")
 
+            prev_language = settings["language"]
+            prev_model = settings["model"]
+<% if (llmProvider === 'ollama') { -%>
+            prev_stt_model = settings["sttModel"]
+<% } -%>
+
             if "reasoning" in payload:
                 settings["reasoning"] = bool(payload["reasoning"])
             if "temperature" in payload:
-                settings["temperature"] = float(payload["temperature"])
+                settings["temperature"] = _clamp_float(payload["temperature"], 0.0, 2.0, settings["temperature"])
             if "topP" in payload:
-                settings["topP"] = float(payload["topP"])
+                settings["topP"] = _clamp_float(payload["topP"], 0.0, 1.0, settings["topP"])
             if "topK" in payload:
-                settings["topK"] = int(payload["topK"])
+                settings["topK"] = _clamp_int(payload["topK"], 1, 200, settings["topK"])
             if "language" in payload and isinstance(payload["language"], str):
-                settings["language"] = payload["language"]
+                settings["language"] = _normalize_language(payload["language"])
+            if "model" in payload and isinstance(payload["model"], str):
+                candidate_model = payload["model"].strip()
+                if candidate_model:
+                    settings["model"] = candidate_model
+<% if (llmProvider === 'ollama') { -%>
+            if "sttModel" in payload and isinstance(payload["sttModel"], str):
+                candidate_stt_model = payload["sttModel"].strip()
+                if candidate_stt_model:
+                    settings["sttModel"] = candidate_stt_model
+<% } -%>
 
-            agent.instructions = (
-                "You are a logical reasoning AI. Think step-by-step before answering."
-                if settings["reasoning"]
-                else "You are a helpful, conversational AI. Keep your responses concise."
+<% if (llmProvider === 'ollama') { -%>
+            _apply_ollama_runtime_settings(llm, settings)
+<% } -%>
+            if settings["language"] != prev_language:
+<% if (llmProvider === 'ollama') { -%>
+                stt_engine.set_language(settings["language"])
+                tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
+                try:
+                    onnx_path = _ensure_piper_voice_model(tts_model)
+                    tts_engine.set_model(onnx_path)
+                except Exception as exc:
+                    logger.warning("Failed to switch TTS language to %s: %s", settings["language"], exc)
+                    settings["language"] = "en"
+                    fallback_path = _ensure_piper_voice_model("en_US-lessac-medium")
+                    tts_engine.set_model(fallback_path)
+<% } else { -%>
+                logger.info("Language changed to %s (STT/TTS provider constraints apply)", settings["language"])
+<% } -%>
+
+<% if (llmProvider === 'ollama') { -%>
+            if settings["sttModel"] != prev_stt_model:
+                try:
+                    stt_engine.set_model(settings["sttModel"])
+                except Exception as exc:
+                    logger.warning("Failed to switch STT model to %s: %s", settings["sttModel"], exc)
+                    settings["sttModel"] = prev_stt_model
+<% } -%>
+
+            asyncio.create_task(
+                agent.update_instructions(
+                    _build_agent_instructions(settings["reasoning"], settings["language"])
+                )
             )
 
+<% if (llmProvider === 'ollama') { -%>
+            if settings["model"] != prev_model and warmup_enabled:
+                asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
+<% } -%>
+
             msg = (
-                f"Settings updated (reasoning={settings['reasoning']}, "
+                f"Settings applied (reasoning={settings['reasoning']}, "
+                f"model={settings['model']}, "
                 f"temp={settings['temperature']:.2f}, "
-                f"lang={settings['language']})"
+                f"top_p={settings['topP']:.2f}, "
+                f"top_k={settings['topK']}, "
+                f"lang={settings['language']}"
+<% if (llmProvider === 'ollama') { -%>
+                f", stt={settings['sttModel']}"
+<% } -%>
+                f")"
             )
             asyncio.create_task(_publish_ui_log(ctx, msg))
         except Exception as exc:

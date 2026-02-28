@@ -121,6 +121,7 @@ function VoiceAssistantUI() {
             <span>LLM Model</span>
             <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} style={{ padding: "0.5rem", borderRadius: "8px", border: "1px solid #d1d5db" }}>
               <option value="<%= modelName %>"><%= modelName %></option>
+              <option value="qwen2.5:1.5b">qwen2.5:1.5b (Low Latency)</option>
               <option value="qwen2.5:3b">qwen2.5:3b (Multilingual)</option>
               <option value="llama3.2:3b">llama3.2:3b</option>
             </select>

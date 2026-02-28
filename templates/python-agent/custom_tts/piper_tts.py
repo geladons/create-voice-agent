@@ -9,6 +9,7 @@ import numpy as np
 import asyncio
 import logging
 import onnxruntime as ort
+import threading
 import uuid
 
 from livekit.agents import tts
@@ -44,12 +45,14 @@ class PiperTTSPlugin(tts.TTS):
         self.use_cuda = use_cuda
         self.ort_intra_threads = max(int(ort_intra_threads), 1)
         self.ort_inter_threads = max(int(ort_inter_threads), 1)
+        self._voice_lock = threading.RLock()
         self._voice = None
         self._load_voice()
 
-    def _load_voice(self):
-        logger.info(f"Loading Piper voice model: {self._tts_model_path}")
-        config_path = f"{self._tts_model_path}.json"
+    def _load_voice(self, model_path=None):
+        target_model = str(model_path or self._tts_model_path)
+        logger.info("Loading Piper voice model: %s", target_model)
+        config_path = f"{target_model}.json"
         with open(config_path, "r", encoding="utf-8") as config_file:
             config_dict = json.load(config_file)
 
@@ -64,20 +67,29 @@ class PiperTTSPlugin(tts.TTS):
         session_options.inter_op_num_threads = self.ort_inter_threads
 
         session = ort.InferenceSession(
-            self._tts_model_path,
+            target_model,
             sess_options=session_options,
             providers=providers,
         )
 
-        self._voice = PiperVoice(
-            session=session,
-            config=PiperConfig.from_dict(config_dict),
-        )
+        with self._voice_lock:
+            self._tts_model_path = target_model
+            self._voice = PiperVoice(
+                session=session,
+                config=PiperConfig.from_dict(config_dict),
+            )
         logger.info(
             "Piper voice model loaded successfully (intra_threads=%d, inter_threads=%d)",
             self.ort_intra_threads,
             self.ort_inter_threads,
         )
+
+    def set_model(self, model_path):
+        target_model = str(model_path)
+        if target_model == self._tts_model_path:
+            return
+        logger.info("Switching Piper voice: %s -> %s", self._tts_model_path, target_model)
+        self._load_voice(target_model)
 
     def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
         return PiperStream(self, text, conn_options)
@@ -108,6 +120,8 @@ class PiperStream(tts.ChunkedStream):
 
             loop = asyncio.get_event_loop()
             chunks = await loop.run_in_executor(None, self._synthesize_chunks, config)
+            if not chunks:
+                chunks = [np.zeros(22050, dtype=np.int16).tobytes()]
 
             for chunk in chunks:
                 output_emitter.push(chunk)
@@ -122,7 +136,10 @@ class PiperStream(tts.ChunkedStream):
 
     def _synthesize_chunks(self, config):
         chunks = []
-        for chunk in self.plugin._voice.synthesize(self.input_text, syn_config=config):
+        with self.plugin._voice_lock:
+            voice = self.plugin._voice
+
+        for chunk in voice.synthesize(self.input_text, syn_config=config):
             audio_data = chunk.audio_int16_bytes
             if chunk.sample_channels == 2:
                 audio = np.frombuffer(audio_data, dtype=np.int16)

@@ -48,7 +48,7 @@ export async function scaffold({
   llmProvider,
   includeFrontend,
   deploymentType = null,
-  modelName = 'qwen3-vl:2b',
+  modelName = 'qwen2.5:1.5b',
   language = 'en',
   ollamaIp = 'localhost',
   hostIp = '127.0.0.1',

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const FALLBACK_MODELS = ["<%= modelName %>", "qwen3-vl:2b", "qwen3-vl:4b", "llama3.2:3b"];
+const FALLBACK_MODELS = ["<%= modelName %>", "qwen2.5:1.5b", "qwen2.5:3b", "llama3.2:3b"];
 
 function uniqueModels(input: string[]) {
   return Array.from(new Set(input.filter((item) => item && item.trim().length > 0)));
