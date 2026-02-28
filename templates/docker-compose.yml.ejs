@@ -95,12 +95,22 @@ services:
       - LIVEKIT_URL=ws://livekit:7880
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_JOB_MEMORY_WARN_MB=${LIVEKIT_JOB_MEMORY_WARN_MB:-1024}
+      - LIVEKIT_JOB_MEMORY_LIMIT_MB=${LIVEKIT_JOB_MEMORY_LIMIT_MB:-1536}
 <% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
       - OLLAMA_BASE_URL=http://ollama:11434/v1
 <% } else if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
 <% } else { -%>
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+<% } -%>
+<% if (llmProvider === 'ollama') { -%>
+      - PIPER_ORT_INTRA_THREADS=${PIPER_ORT_INTRA_THREADS:-1}
+      - PIPER_ORT_INTER_THREADS=${PIPER_ORT_INTER_THREADS:-1}
+      - FASTER_WHISPER_MODEL_CACHE_DIR=${FASTER_WHISPER_MODEL_CACHE_DIR:-/app/models/faster-whisper}
+      - FASTER_WHISPER_LOCAL_FILES_ONLY=${FASTER_WHISPER_LOCAL_FILES_ONLY:-0}
+      - HF_HOME=${HF_HOME:-/app/.cache/huggingface}
+      - HUGGINGFACE_HUB_CACHE=${HUGGINGFACE_HUB_CACHE:-/app/.cache/huggingface/hub}
 <% } -%>
 <% if (llmProvider === 'ollama' && deploymentType === 'existing') { -%>
     extra_hosts:

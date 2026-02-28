@@ -6,6 +6,7 @@ Uses the faster-whisper Python package for fully offline speech-to-text.
 import asyncio
 import io
 import logging
+import os
 import wave
 
 import numpy as np
@@ -18,7 +19,15 @@ logger = logging.getLogger("faster-whisper-stt")
 
 
 class FasterWhisperSTT(stt.STT):
-    def __init__(self, model="base", language="en", device="cpu", compute_type="int8"):
+    def __init__(
+        self,
+        model="base",
+        language="en",
+        device="cpu",
+        compute_type="int8",
+        download_root=None,
+        local_files_only=None,
+    ):
         super().__init__(
             capabilities=stt.STTCapabilities(streaming=False, interim_results=False),
         )
@@ -26,15 +35,35 @@ class FasterWhisperSTT(stt.STT):
         self.language = language
         self.device = device
         self.compute_type = compute_type
+        self.download_root = download_root or os.getenv(
+            "FASTER_WHISPER_MODEL_CACHE_DIR",
+            "/app/models/faster-whisper",
+        )
+        if local_files_only is None:
+            local_files_only = os.getenv("FASTER_WHISPER_LOCAL_FILES_ONLY", "0")
+        self.local_files_only = str(local_files_only).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         self._model = None
         self._load_model()
 
     def _load_model(self):
-        logger.info(f"Loading Whisper model: {self.model_size} (device={self.device})")
+        logger.info(
+            "Loading Whisper model: %s (device=%s, cache_dir=%s, local_files_only=%s)",
+            self.model_size,
+            self.device,
+            self.download_root,
+            self.local_files_only,
+        )
         self._model = WhisperModel(
             self.model_size,
             device=self.device,
             compute_type=self.compute_type,
+            download_root=self.download_root,
+            local_files_only=self.local_files_only,
         )
         logger.info("Whisper model loaded successfully")
 

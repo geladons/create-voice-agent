@@ -21,6 +21,42 @@ logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, falling back to %.1f", name, raw, default)
+        return default
+
+    if value < 0:
+        logger.warning("%s must be non-negative, falling back to %.1f", name, default)
+        return default
+
+    return value
+
+
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, falling back to %d", name, raw, default)
+        return default
+
+    if value < minimum:
+        logger.warning("%s must be >= %d, falling back to %d", name, minimum, default)
+        return default
+
+    return value
+
+
 async def _publish_ui_log(ctx: JobContext, message: str) -> None:
     try:
         await ctx.room.local_participant.publish_data(message.encode("utf-8"))
@@ -87,6 +123,8 @@ async def entrypoint(ctx: JobContext):
     tts_model = voice_map.get(language, "en_US-lessac-medium")
     onnx_path = f"/app/models/{tts_model}.onnx"
     json_path = f"/app/models/{tts_model}.onnx.json"
+    piper_ort_intra_threads = _env_int("PIPER_ORT_INTRA_THREADS", 1)
+    piper_ort_inter_threads = _env_int("PIPER_ORT_INTER_THREADS", 1)
 
     if not os.path.exists(onnx_path):
         os.makedirs("/app/models", exist_ok=True)
@@ -99,7 +137,11 @@ async def entrypoint(ctx: JobContext):
         except Exception as exc:
             logger.error("Failed to download TTS model: %s", exc)
 
-    tts_engine = PiperTTSPlugin(model=onnx_path)
+    tts_engine = PiperTTSPlugin(
+        model=onnx_path,
+        ort_intra_threads=piper_ort_intra_threads,
+        ort_inter_threads=piper_ort_inter_threads,
+    )
     stt_engine = FasterWhisperSTT(model="base", language=language)
 <% } -%>
 
@@ -112,6 +154,12 @@ async def entrypoint(ctx: JobContext):
         llm=llm,
         tts=tts_engine,
     )
+    room_disconnected = asyncio.Event()
+
+    @ctx.room.on("disconnected")
+    def on_room_disconnected(reason):
+        logger.info("Room disconnected: %s", reason)
+        room_disconnected.set()
 
     @ctx.room.on("data_received")
     def on_data_received(data_packet: DataPacket):
@@ -149,10 +197,19 @@ async def entrypoint(ctx: JobContext):
 
     try:
         await session.start(agent=agent, room=ctx.room)
+        if ctx.room.isconnected():
+            await room_disconnected.wait()
     finally:
+        await session.aclose()
         if oai_client is not None:
             await oai_client.close()
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    cli.run_app(
+        WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            job_memory_warn_mb=_env_float("LIVEKIT_JOB_MEMORY_WARN_MB", 1024.0),
+            job_memory_limit_mb=_env_float("LIVEKIT_JOB_MEMORY_LIMIT_MB", 1536.0),
+        )
+    )

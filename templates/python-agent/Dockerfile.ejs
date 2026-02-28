@@ -13,7 +13,7 @@ RUN apt-get update && \
 
 <% if (llmProvider === 'ollama') { -%>
 # Download Piper TTS voice model (en_US-lessac-medium)
-RUN mkdir -p /app/models && \
+RUN mkdir -p /app/models /app/models/faster-whisper /app/.cache/huggingface && \
     curl -L -o /app/models/en_US-lessac-medium.onnx \
       "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx" && \
     curl -L -o /app/models/en_US-lessac-medium.onnx.json \

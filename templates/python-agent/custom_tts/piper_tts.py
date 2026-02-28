@@ -4,20 +4,33 @@ Based on the community plugin by nay-cat/LiveKit-PiperTTS-Plugin.
 Uses the piper-tts Python package for fully offline text-to-speech.
 """
 
+import json
 import numpy as np
 import asyncio
 import logging
+import onnxruntime as ort
 
 from livekit.agents import tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from livekit import rtc
 from piper import PiperVoice, SynthesisConfig
+from piper.config import PiperConfig
 
 logger = logging.getLogger("piper-tts")
 
 
 class PiperTTSPlugin(tts.TTS):
-    def __init__(self, model, speed=1.0, volume=1.0, noise_scale=0.667, noise_w=0.8, use_cuda=False):
+    def __init__(
+        self,
+        model,
+        speed=1.0,
+        volume=1.0,
+        noise_scale=0.667,
+        noise_w=0.8,
+        use_cuda=False,
+        ort_intra_threads=1,
+        ort_inter_threads=1,
+    ):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=22050,
@@ -29,13 +42,42 @@ class PiperTTSPlugin(tts.TTS):
         self.noise_scale = noise_scale
         self.noise_w = noise_w
         self.use_cuda = use_cuda
+        self.ort_intra_threads = max(int(ort_intra_threads), 1)
+        self.ort_inter_threads = max(int(ort_inter_threads), 1)
         self._voice = None
         self._load_voice()
 
     def _load_voice(self):
         logger.info(f"Loading Piper voice model: {self._tts_model_path}")
-        self._voice = PiperVoice.load(self._tts_model_path, use_cuda=self.use_cuda)
-        logger.info("Piper voice model loaded successfully")
+        config_path = f"{self._tts_model_path}.json"
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            config_dict = json.load(config_file)
+
+        providers = (
+            [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "HEURISTIC"})]
+            if self.use_cuda
+            else ["CPUExecutionProvider"]
+        )
+
+        session_options = ort.SessionOptions()
+        session_options.intra_op_num_threads = self.ort_intra_threads
+        session_options.inter_op_num_threads = self.ort_inter_threads
+
+        session = ort.InferenceSession(
+            self._tts_model_path,
+            sess_options=session_options,
+            providers=providers,
+        )
+
+        self._voice = PiperVoice(
+            session=session,
+            config=PiperConfig.from_dict(config_dict),
+        )
+        logger.info(
+            "Piper voice model loaded successfully (intra_threads=%d, inter_threads=%d)",
+            self.ort_intra_threads,
+            self.ort_inter_threads,
+        )
 
     def synthesize(self, text, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
         return PiperStream(self, text, conn_options)
