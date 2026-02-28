@@ -13,6 +13,7 @@ import {
   ConnectionState,
   useRoomContext
 } from "@livekit/components-react";
+import { RoomEvent } from "livekit-client";
 import "@livekit/components-styles";
 
 function VoiceAssistantUI() {
@@ -36,27 +37,52 @@ function VoiceAssistantUI() {
     if (!room) return;
     const handleData = (payload: Uint8Array) => {
       try {
-        const msg = new TextDecoder().decode(payload);
-        setLogs(prev => [...prev, `[Agent]: ${msg}`]);
-      } catch (e) {}
+        const message = new TextDecoder().decode(payload);
+        setLogs((prev) => [...prev.slice(-200), `[Agent]: ${message}`]);
+      } catch (error) {
+        setLogs((prev) => [...prev.slice(-200), "[UI]: Failed to decode incoming data"]);
+      }
     };
-    room.on("data_received", handleData);
-    room.on("connected", () => setLogs(prev => [...prev, "[System]: Connected to room"]));
-    room.on("disconnected", () => setLogs(prev => [...prev, "[System]: Disconnected"]));
-    return () => { room.off("data_received", handleData); };
+
+    const handleConnected = () => setLogs((prev) => [...prev.slice(-200), "[System]: Connected to room"]);
+    const handleDisconnected = () => setLogs((prev) => [...prev.slice(-200), "[System]: Disconnected"]);
+
+    room.on(RoomEvent.DataReceived, handleData);
+    room.on(RoomEvent.Connected, handleConnected);
+    room.on(RoomEvent.Disconnected, handleDisconnected);
+
+    return () => {
+      room.off(RoomEvent.DataReceived, handleData);
+      room.off(RoomEvent.Connected, handleConnected);
+      room.off(RoomEvent.Disconnected, handleDisconnected);
+    };
   }, [room]);
 
   useEffect(() => {
     if (localParticipant && roomState === ConnectionState.Connected) {
       const timer = setTimeout(() => {
         try {
-          const payload = JSON.stringify({ temperature, topP, topK, reasoning, language, sttModel });
-          localParticipant.publishData(new TextEncoder().encode(payload), { reliable: true }).catch(() => {});
-        } catch (e) {}
+          const payload = JSON.stringify({
+            model: selectedModel,
+            temperature,
+            topP,
+            topK,
+            reasoning,
+            language,
+            sttModel,
+          });
+          localParticipant
+            .publishData(new TextEncoder().encode(payload), { reliable: true })
+            .catch((error) => {
+              setLogs((prev) => [...prev.slice(-200), `[UI]: Data publish failed (${String(error)})`]);
+            });
+        } catch (error) {
+          setLogs((prev) => [...prev.slice(-200), `[UI]: Settings payload error (${String(error)})`]);
+        }
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [temperature, topP, topK, reasoning, language, sttModel, localParticipant, roomState]);
+  }, [selectedModel, temperature, topP, topK, reasoning, language, sttModel, localParticipant, roomState]);
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "1rem", padding: "1rem 0", textAlign: "left" }}>
@@ -103,6 +129,16 @@ function VoiceAssistantUI() {
           <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
             <span>Temperature: {temperature.toFixed(2)}</span>
             <input type="range" min="0" max="2" step="0.05" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <span>Top-P: {topP.toFixed(2)}</span>
+            <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} />
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <span>Top-K: {topK}</span>
+            <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} />
           </label>
           
           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>

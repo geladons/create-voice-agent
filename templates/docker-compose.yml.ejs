@@ -13,10 +13,11 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 5s
-      timeout: 3s
-      retries: 10
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     deploy:
       resources:
         limits:
@@ -29,8 +30,16 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
-    command: >
-      sh -c "echo 'Waiting for Ollama...' && sleep 5 && echo 'Pulling model <%= modelName %>...' && curl -s -X POST http://ollama:11434/api/pull -d '{\"name\": \"<%= modelName %>\"}' && echo 'Model pulled successfully!'"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        echo "Pulling model <%= modelName %>..."
+        curl -sS -X POST http://ollama:11434/api/pull \
+          -H "Content-Type: application/json" \
+          -d '{"name":"<%= modelName %>","stream":false}'
+        echo "Model pulled successfully."
 
 <% } -%>
   # ─── Redis (required by LiveKit) ───────────────────────────────────
@@ -74,9 +83,13 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      livekit:
+        condition: service_started
 <% if (llmProvider === 'ollama' && deploymentType === 'standalone') { -%>
       ollama:
         condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
 <% } -%>
     environment:
       - LIVEKIT_URL=ws://livekit:7880
