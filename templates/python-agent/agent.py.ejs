@@ -1,56 +1,37 @@
-"""
-<%= projectName %> — Voice AI Agent
-Uses the official livekit-agents library with AgentSession.
-"""
-
 import json
 import os
 import logging
 import urllib.request
-
-from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli
-from livekit.plugins import silero
+import asyncio
+import httpx
+from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli, Agent, AgentSession
 from livekit.rtc import DataPacket
-<% if (llmProvider === 'openai') { -%>
-from livekit.plugins import deepgram
-from livekit.plugins import openai as openai_plugin
-<% } else { -%>
+from livekit.plugins import silero
 from livekit.plugins import openai as openai_plugin
 from custom_stt.faster_whisper_stt import FasterWhisperSTT
 from custom_tts.piper_tts import PiperTTSPlugin
-<% } -%>
 
 logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
 
 
 async def entrypoint(ctx: JobContext):
-    """Called when a participant joins the LiveKit room."""
-
     logger.info(f"Connecting to room: {ctx.room.name}")
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-
     participant = await ctx.wait_for_participant()
     logger.info(f"Participant joined: {participant.identity}")
 
-<% if (llmProvider === 'openai') { -%>
-    llm = openai_plugin.LLM(model="gpt-4o-mini")
-    tts_engine = openai_plugin.TTS(voice="alloy")
-    stt_engine = deepgram.STT()
-<% } else { -%>
+    # Use extended timeout (120s) to prevent "Request timed out" on slow CPUs
+    http_client = httpx.AsyncClient(timeout=120.0)
+
     llm = openai_plugin.LLM(
         model="<%= modelName %>",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434/v1"),
-        api_key="ollama"
+        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+        api_key="ollama",
+        client=http_client,
     )
 
-    voice_map = {
-        "en": "en_US-lessac-medium",
-        "ru": "ru_RU-dmitri-medium",
-        "de": "de_DE-thorsten-medium",
-        "fr": "fr_FR-upmc-medium",
-        "es": "es_ES-carlfm-medium",
-    }
+    voice_map = {"en": "en_US-lessac-medium", "ru": "ru_RU-dmitri-medium", "de": "de_DE-thorsten-medium", "es": "es_ES-carlfm-medium"}
     language = "<%= language %>"
     tts_model = voice_map.get(language, "en_US-lessac-medium")
     onnx_path = f"/app/models/{tts_model}.onnx"
@@ -58,55 +39,36 @@ async def entrypoint(ctx: JobContext):
 
     if not os.path.exists(onnx_path):
         os.makedirs("/app/models", exist_ok=True)
-        logger.info(f"Language auto-detected: {language}. Downloading {tts_model}...")
-
         parts = tts_model.split("-")
         lang_dir = parts[0].split("_")[0]
         hf_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/{lang_dir}/{parts[0]}/{parts[1]}/{parts[2]}/{tts_model}"
-
         try:
-            logger.info(f"Downloading from: {hf_url}.onnx")
+            logger.info(f"Downloading TTS: {tts_model}...")
             urllib.request.urlretrieve(f"{hf_url}.onnx?download=true", onnx_path)
             urllib.request.urlretrieve(f"{hf_url}.onnx.json?download=true", json_path)
-            logger.info("Download complete.")
         except Exception as e:
             logger.error(f"Failed to download TTS model: {e}")
 
     tts_engine = PiperTTSPlugin(model=onnx_path)
     stt_engine = FasterWhisperSTT(model="base", language=language)
-<% } -%>
 
-    agent = Agent(
-        instructions="You are a helpful, conversational AI. Keep your responses concise and natural."
-    )
-
-    session = AgentSession(
-        vad=silero.VAD.load(),
-        stt=stt_engine,
-        llm=llm,
-        tts=tts_engine,
-    )
-
-    await session.start(agent=agent, room=ctx.room)
+    agent = Agent(instructions="You are a helpful, conversational AI. Keep your responses concise.")
+    session = AgentSession(vad=silero.VAD.load(), stt=stt_engine, llm=llm, tts=tts_engine)
 
     @ctx.room.on("data_received")
     def on_data_received(data_packet: DataPacket):
         try:
             payload = json.loads(data_packet.data.decode("utf-8"))
-            logger.info(f"Received UI update: {payload}")
-            
-            # Send confirmation log back to UI
-            import asyncio
-            msg = f"Settings updated (Reasoning: {payload.get('reasoning')}, Lang: {payload.get('language')})"
-            asyncio.create_task(ctx.room.local_participant.publish_data(msg.encode('utf-8')))
-
             if "reasoning" in payload:
-                if payload["reasoning"]:
-                    agent.instructions = "You are a logical reasoning AI. Think step-by-step."
-                else:
-                    agent.instructions = "You are a conversational AI. Keep it brief."
+                agent.instructions = "You are a logical reasoning AI. Think step-by-step before answering." if payload["reasoning"] else "You are a helpful, conversational AI. Keep your responses concise."
+
+            # Send confirmation log back to UI
+            msg = f"Settings updated (Lang: {payload.get('language')})"
+            asyncio.create_task(ctx.room.local_participant.publish_data(msg.encode("utf-8")))
         except Exception as e:
-            logger.error(f"Error handling UI data: {e}")
+            pass
+
+    await session.start(agent=agent, room=ctx.room)
 
 
 if __name__ == "__main__":

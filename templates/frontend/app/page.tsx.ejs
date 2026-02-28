@@ -104,16 +104,6 @@ function VoiceAssistantUI() {
             <span>Temperature: {temperature.toFixed(2)}</span>
             <input type="range" min="0" max="2" step="0.05" value={temperature} onChange={(e) => setTemperature(Number(e.target.value))} />
           </label>
-
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Top-P: {topP.toFixed(2)}</span>
-            <input type="range" min="0" max="1" step="0.05" value={topP} onChange={(e) => setTopP(Number(e.target.value))} />
-          </label>
-
-          <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            <span>Top-K: {topK}</span>
-            <input type="range" min="0" max="100" step="1" value={topK} onChange={(e) => setTopK(Number(e.target.value))} />
-          </label>
           
           <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
             <input type="checkbox" checked={reasoning} onChange={(e) => setReasoning(e.target.checked)} style={{ width: "18px", height: "18px" }} />
