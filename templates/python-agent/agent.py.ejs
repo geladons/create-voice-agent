@@ -226,6 +226,7 @@ async def entrypoint(ctx: JobContext):
     oai_client = None
     runtime_ready = False
     first_settings_received = asyncio.Event()
+    settings_applied = False
 <% if (llmProvider === 'ollama') { -%>
     warmup_enabled = str(os.getenv("OLLAMA_WARMUP", "1")).strip().lower() in {"1", "true", "yes", "on"}
 <% } -%>
@@ -325,6 +326,7 @@ async def entrypoint(ctx: JobContext):
             )
             logger.info(msg)
             asyncio.create_task(_publish_ui_log(ctx, msg))
+            settings_applied = True
         except Exception as exc:
             logger.warning("Error handling UI settings update: %s", exc)
             asyncio.create_task(_publish_ui_log(ctx, f"Settings update rejected: {exc}"))
@@ -429,6 +431,14 @@ async def entrypoint(ctx: JobContext):
             logger.info("No initial UI settings received within %.1fs; using defaults", initial_settings_wait_sec)
 
     try:
+        # Wait for initial settings to be applied before starting session
+        if initial_settings_wait_sec > 0:
+            try:
+                await asyncio.wait_for(first_settings_received.wait(), timeout=initial_settings_wait_sec)
+                logger.info("Initial UI settings received, starting session with applied settings")
+            except asyncio.TimeoutError:
+                logger.info("No initial UI settings received within %.1fs, starting with defaults", initial_settings_wait_sec)
+        
         await session.start(agent=agent, room=ctx.room)
         if ctx.room.isconnected():
             await room_disconnected.wait()

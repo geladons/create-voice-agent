@@ -65,6 +65,14 @@ class PiperTTSPlugin(tts.TTS):
         session_options = ort.SessionOptions()
         session_options.intra_op_num_threads = self.ort_intra_threads
         session_options.inter_op_num_threads = self.ort_inter_threads
+        # Optimize for CPU inference
+        session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        
+        # Disable unnecessary optimizations that can cause overhead
+        session_options.enable_cpu_mem_arena = True
+        session_options.enable_mem_pattern = True
+        session_options.enable_mem_reuse = True
 
         session = ort.InferenceSession(
             target_model,

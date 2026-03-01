@@ -105,12 +105,16 @@ class FasterWhisperSTT(stt.STT):
             self.best_of,
             self.vad_filter,
         )
+        
+        # Optimize model loading for CPU
         model = WhisperModel(
             self.model_size,
             device=self.device,
             compute_type=self.compute_type,
             download_root=self.download_root,
             local_files_only=self.local_files_only,
+            cpu_threads=max(1, os.cpu_count() // 2),  # Use half of available CPU threads
+            num_workers=1,  # Reduce worker threads to avoid overhead
         )
         with self._model_lock:
             self._model = model
