@@ -8,14 +8,9 @@ import openai
 from livekit.agents import Agent, AgentSession, AutoSubscribe, JobContext, WorkerOptions, cli
 from livekit.plugins import silero
 from livekit.rtc import DataPacket
-<% if (llmProvider === 'openai') { -%>
-from livekit.plugins import deepgram
-from livekit.plugins import openai as openai_plugin
-<% } else { -%>
 from livekit.plugins import openai as openai_plugin
 from custom_stt.faster_whisper_stt import FasterWhisperSTT
 from custom_tts.piper_tts import PiperTTSPlugin
-<% } -%>
 
 logger = logging.getLogger("voice-agent")
 logger.setLevel(logging.INFO)
@@ -144,7 +139,6 @@ def _extract_text_content(item: object) -> str:
     return "\n".join(parts)
 
 
-<% if (llmProvider === 'ollama') { -%>
 VOICE_MODEL_BY_LANGUAGE = {
     "en": "en_US-lessac-medium",
     "ru": "ru_RU-dmitri-medium",
@@ -199,7 +193,6 @@ async def _warmup_ollama_model(client: openai.AsyncOpenAI, model_name: str) -> N
         logger.info("Ollama warmup completed for model: %s", model_name)
     except Exception as exc:
         logger.debug("Ollama warmup skipped/failed for %s: %s", model_name, exc)
-<% } -%>
 
 
 async def entrypoint(ctx: JobContext):
@@ -214,22 +207,16 @@ async def entrypoint(ctx: JobContext):
         "topP": 0.9,
         "topK": 40,
         "reasoning": False,
-        "language": _normalize_language("<%= language %>"),
-<% if (llmProvider === 'openai') { -%>
-        "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-<% } else { -%>
-        "model": "<%= modelName %>",
+        "language": _normalize_language("en"),
+        "model": "qwen2.5:1.5b",
         "sttModel": os.getenv("FASTER_WHISPER_MODEL", "base"),
-<% } -%>
     }
 
     oai_client = None
     runtime_ready = False
     first_settings_received = asyncio.Event()
     settings_applied = False
-<% if (llmProvider === 'ollama') { -%>
     warmup_enabled = str(os.getenv("OLLAMA_WARMUP", "1")).strip().lower() in {"1", "true", "yes", "on"}
-<% } -%>
 
     @ctx.room.on("data_received")
     def on_data_received(data_packet: DataPacket):
@@ -244,9 +231,7 @@ async def entrypoint(ctx: JobContext):
 
             prev_language = settings["language"]
             prev_model = settings["model"]
-<% if (llmProvider === 'ollama') { -%>
             prev_stt_model = settings["sttModel"]
-<% } -%>
 
             if "reasoning" in payload:
                 settings["reasoning"] = bool(payload["reasoning"])
@@ -262,22 +247,17 @@ async def entrypoint(ctx: JobContext):
                 candidate_model = payload["model"].strip()
                 if candidate_model:
                     settings["model"] = candidate_model
-<% if (llmProvider === 'ollama') { -%>
             if "sttModel" in payload and isinstance(payload["sttModel"], str):
                 candidate_stt_model = payload["sttModel"].strip()
                 if candidate_stt_model:
                     settings["sttModel"] = candidate_stt_model
-<% } -%>
 
             if not runtime_ready:
                 logger.info("Queued UI settings before pipeline initialization is complete")
                 return
 
-<% if (llmProvider === 'ollama') { -%>
             _apply_ollama_runtime_settings(llm, settings)
-<% } -%>
             if settings["language"] != prev_language:
-<% if (llmProvider === 'ollama') { -%>
                 stt_engine.set_language(settings["language"])
                 tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
                 try:
@@ -288,18 +268,13 @@ async def entrypoint(ctx: JobContext):
                     settings["language"] = "en"
                     fallback_path = _ensure_piper_voice_model("en_US-lessac-medium")
                     tts_engine.set_model(fallback_path)
-<% } else { -%>
-                logger.info("Language changed to %s (STT/TTS provider constraints apply)", settings["language"])
-<% } -%>
 
-<% if (llmProvider === 'ollama') { -%>
             if settings["sttModel"] != prev_stt_model:
                 try:
                     stt_engine.set_model(settings["sttModel"])
                 except Exception as exc:
                     logger.warning("Failed to switch STT model to %s: %s", settings["sttModel"], exc)
                     settings["sttModel"] = prev_stt_model
-<% } -%>
 
             asyncio.create_task(
                 agent.update_instructions(
@@ -307,10 +282,8 @@ async def entrypoint(ctx: JobContext):
                 )
             )
 
-<% if (llmProvider === 'ollama') { -%>
             if settings["model"] != prev_model and warmup_enabled:
                 asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
-<% } -%>
 
             msg = (
                 f"Settings applied (reasoning={settings['reasoning']}, "
@@ -319,9 +292,7 @@ async def entrypoint(ctx: JobContext):
                 f"top_p={settings['topP']:.2f}, "
                 f"top_k={settings['topK']}, "
                 f"lang={settings['language']}"
-<% if (llmProvider === 'ollama') { -%>
                 f", stt={settings['sttModel']}"
-<% } -%>
                 f")"
             )
             logger.info(msg)
@@ -331,11 +302,6 @@ async def entrypoint(ctx: JobContext):
             logger.warning("Error handling UI settings update: %s", exc)
             asyncio.create_task(_publish_ui_log(ctx, f"Settings update rejected: {exc}"))
 
-<% if (llmProvider === 'openai') { -%>
-    llm = openai_plugin.LLM(model=settings["model"])
-    tts_engine = openai_plugin.TTS(voice="alloy")
-    stt_engine = deepgram.STT()
-<% } else { -%>
     import httpx
     llm_timeout_sec = _env_float("OLLAMA_LLM_TIMEOUT_SEC", 120.0)
 
@@ -379,7 +345,6 @@ async def entrypoint(ctx: JobContext):
     )
     if warmup_enabled:
         asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
-<% } -%>
 
     agent = Agent(
         instructions=_build_agent_instructions(settings["reasoning"], settings["language"])
