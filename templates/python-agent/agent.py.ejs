@@ -256,51 +256,76 @@ async def entrypoint(ctx: JobContext):
                 logger.info("Queued UI settings before pipeline initialization is complete")
                 return
 
+            # Apply settings immediately
             _apply_ollama_runtime_settings(llm, settings)
+            
+            # Handle language changes
             if settings["language"] != prev_language:
-                stt_engine.set_language(settings["language"])
-                tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
                 try:
+                    stt_engine.set_language(settings["language"])
+                    tts_model = VOICE_MODEL_BY_LANGUAGE.get(settings["language"], "en_US-lessac-medium")
                     onnx_path = _ensure_piper_voice_model(tts_model)
                     tts_engine.set_model(onnx_path)
+                    logger.info("Language switched to: %s", settings["language"])
                 except Exception as exc:
-                    logger.warning("Failed to switch TTS language to %s: %s", settings["language"], exc)
-                    settings["language"] = "en"
-                    fallback_path = _ensure_piper_voice_model("en_US-lessac-medium")
-                    tts_engine.set_model(fallback_path)
+                    logger.warning("Failed to switch language to %s: %s", settings["language"], exc)
+                    settings["language"] = prev_language  # Revert to previous language
 
+            # Handle STT model changes
             if settings["sttModel"] != prev_stt_model:
                 try:
                     stt_engine.set_model(settings["sttModel"])
+                    logger.info("STT model switched to: %s", settings["sttModel"])
                 except Exception as exc:
                     logger.warning("Failed to switch STT model to %s: %s", settings["sttModel"], exc)
-                    settings["sttModel"] = prev_stt_model
+                    settings["sttModel"] = prev_stt_model  # Revert to previous model
 
+            # Update agent instructions
             asyncio.create_task(
                 agent.update_instructions(
                     _build_agent_instructions(settings["reasoning"], settings["language"])
                 )
             )
 
+            # Warmup new model if changed
             if settings["model"] != prev_model and warmup_enabled:
                 asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
 
             msg = (
-                f"Settings applied (reasoning={settings['reasoning']}, "
+                f"Settings applied successfully: "
+                f"lang={settings['language']}, "
                 f"model={settings['model']}, "
                 f"temp={settings['temperature']:.2f}, "
                 f"top_p={settings['topP']:.2f}, "
                 f"top_k={settings['topK']}, "
-                f"lang={settings['language']}"
-                f", stt={settings['sttModel']}"
-                f")"
+                f"reasoning={settings['reasoning']}, "
+                f"stt={settings['sttModel']}"
             )
             logger.info(msg)
             asyncio.create_task(_publish_ui_log(ctx, msg))
             settings_applied = True
+            
+            # Send confirmation back to UI
+            confirmation = {
+                "type": "settings_applied",
+                "settings": settings.copy(),
+                "status": "success"
+            }
+            asyncio.create_task(_publish_ui_log(ctx, json.dumps(confirmation)))
+            
         except Exception as exc:
             logger.warning("Error handling UI settings update: %s", exc)
-            asyncio.create_task(_publish_ui_log(ctx, f"Settings update rejected: {exc}"))
+            error_msg = f"Settings update failed: {exc}"
+            logger.error(error_msg)
+            asyncio.create_task(_publish_ui_log(ctx, error_msg))
+            
+            # Send error confirmation back to UI
+            error_confirmation = {
+                "type": "settings_error",
+                "error": str(exc),
+                "settings": settings.copy()
+            }
+            asyncio.create_task(_publish_ui_log(ctx, json.dumps(error_confirmation)))
 
     import httpx
     llm_timeout_sec = _env_float("OLLAMA_LLM_TIMEOUT_SEC", 120.0)
@@ -342,6 +367,7 @@ async def entrypoint(ctx: JobContext):
     stt_engine = FasterWhisperSTT(
         model=settings["sttModel"],
         language=settings["language"],
+        local_files_only=True,  # Force offline mode
     )
     if warmup_enabled:
         asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))

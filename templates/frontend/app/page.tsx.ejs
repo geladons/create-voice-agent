@@ -32,20 +32,48 @@ function VoiceAssistantUI() {
   const [sttModel, setSttModel] = useState("base");
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [settingsStatus, setSettingsStatus] = useState<string>("idle"); // idle, applying, applied, error
+  const [lastAppliedSettings, setLastAppliedSettings] = useState<any>(null);
 
   useEffect(() => {
     if (!room) return;
     const handleData = (payload: Uint8Array) => {
       try {
         const message = new TextDecoder().decode(payload);
-        setLogs((prev) => [...prev.slice(-200), `[Agent]: ${message}`]);
+        
+        // Check if it's a JSON confirmation message
+        if (message.startsWith('{')) {
+          try {
+            const data = JSON.parse(message);
+            if (data.type === "settings_applied") {
+              setSettingsStatus("applied");
+              setLastAppliedSettings(data.settings);
+              setLogs((prev) => [...prev.slice(-200), `[Agent]: Settings applied successfully`]);
+            } else if (data.type === "settings_error") {
+              setSettingsStatus("error");
+              setLogs((prev) => [...prev.slice(-200), `[Agent]: Settings error: ${data.error}`]);
+            } else {
+              setLogs((prev) => [...prev.slice(-200), `[Agent]: ${message}`]);
+            }
+          } catch (jsonError) {
+            setLogs((prev) => [...prev.slice(-200), `[Agent]: ${message}`]);
+          }
+        } else {
+          setLogs((prev) => [...prev.slice(-200), `[Agent]: ${message}`]);
+        }
       } catch (error) {
         setLogs((prev) => [...prev.slice(-200), "[UI]: Failed to decode incoming data"]);
       }
     };
 
-    const handleConnected = () => setLogs((prev) => [...prev.slice(-200), "[System]: Connected to room"]);
-    const handleDisconnected = () => setLogs((prev) => [...prev.slice(-200), "[System]: Disconnected"]);
+    const handleConnected = () => {
+      setLogs((prev) => [...prev.slice(-200), "[System]: Connected to room"]);
+      setSettingsStatus("idle");
+    };
+    const handleDisconnected = () => {
+      setLogs((prev) => [...prev.slice(-200), "[System]: Disconnected"]);
+      setSettingsStatus("idle");
+    };
 
     room.on(RoomEvent.DataReceived, handleData);
     room.on(RoomEvent.Connected, handleConnected);
@@ -73,10 +101,16 @@ function VoiceAssistantUI() {
           });
           localParticipant
             .publishData(new TextEncoder().encode(payload), { reliable: true })
+            .then(() => {
+              setSettingsStatus("applying");
+              setLogs((prev) => [...prev.slice(-200), `[UI]: Settings sent to agent`]);
+            })
             .catch((error) => {
+              setSettingsStatus("error");
               setLogs((prev) => [...prev.slice(-200), `[UI]: Data publish failed (${String(error)})`]);
             });
         } catch (error) {
+          setSettingsStatus("error");
           setLogs((prev) => [...prev.slice(-200), `[UI]: Settings payload error (${String(error)})`]);
         }
       }, 500);
@@ -164,22 +198,27 @@ function VoiceAssistantUI() {
                   language,
                   sttModel,
                 });
+                setSettingsStatus("applying");
                 localParticipant?.publishData(new TextEncoder().encode(payload), { reliable: true })
-                  .then(() => setLogs(prev => [...prev.slice(-200), `[UI]: Settings saved successfully`]))
-                  .catch(error => setLogs(prev => [...prev.slice(-200), `[UI]: Failed to save settings: ${String(error)}`]));
+                  .then(() => setLogs(prev => [...prev.slice(-200), `[UI]: Settings sent to agent`]))
+                  .catch(error => {
+                    setSettingsStatus("error");
+                    setLogs(prev => [...prev.slice(-200), `[UI]: Failed to save settings: ${String(error)}`]);
+                  });
               }}
               style={{ 
                 flex: 1,
                 padding: "0.5rem", 
                 borderRadius: "8px", 
-                background: "#3b82f6", 
+                background: settingsStatus === "applying" ? "#94a3b8" : "#3b82f6", 
                 color: "white",
                 border: "none", 
-                cursor: "pointer", 
+                cursor: settingsStatus === "applying" ? "not-allowed" : "pointer", 
                 fontWeight: "bold" 
               }}
+              disabled={settingsStatus === "applying"}
             >
-              💾 Save Settings
+              {settingsStatus === "applying" ? "⏳ Applying..." : "💾 Save Settings"}
             </button>
             <button 
               onClick={() => {
@@ -203,6 +242,48 @@ function VoiceAssistantUI() {
               🧪 Test Data
             </button>
           </div>
+          
+          {settingsStatus === "applied" && lastAppliedSettings && (
+            <div style={{ 
+              marginTop: "1rem", 
+              padding: "1rem", 
+              background: "#dcfce7", 
+              border: "1px solid #bbf7d0", 
+              borderRadius: "8px",
+              fontSize: "0.9rem"
+            }}>
+              <strong>✅ Settings Applied Successfully</strong>
+              <div style={{ marginTop: "0.5rem", display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "0.5rem" }}>
+                <span><strong>Language:</strong> {lastAppliedSettings.language}</span>
+                <span><strong>Model:</strong> {lastAppliedSettings.model}</span>
+                <span><strong>Temp:</strong> {lastAppliedSettings.temperature}</span>
+                <span><strong>Top-P:</strong> {lastAppliedSettings.topP}</span>
+                <span><strong>STT:</strong> {lastAppliedSettings.sttModel}</span>
+                <span><strong>Reasoning:</strong> {lastAppliedSettings.reasoning ? "Yes" : "No"}</span>
+              </div>
+            </div>
+          )}
+          
+          {settingsStatus === "error" && (
+            <div style={{ 
+              marginTop: "1rem", 
+              padding: "1rem", 
+              background: "#fee2e2", 
+              border: "1px solid #fecaca", 
+              borderRadius: "8px",
+              fontSize: "0.9rem"
+            }}>
+              <strong>❌ Settings Application Failed</strong>
+              <p style={{ margin: "0.5rem 0 0 0", color: "#7f1d1d" }}>
+                Check the logs above for error details. Common issues:
+              </p>
+              <ul style={{ margin: "0.5rem 0 0 0", paddingLeft: "1.5rem", color: "#7f1d1d" }}>
+                <li>Agent not connected</li>
+                <li>Invalid model name</li>
+                <li>Network issues</li>
+              </ul>
+            </div>
+          )}
         </div>
 
         <div style={{ marginTop: "0.5rem" }}>
