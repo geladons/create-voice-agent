@@ -331,15 +331,28 @@ async def entrypoint(ctx: JobContext):
     llm_timeout_sec = _env_float("OLLAMA_LLM_TIMEOUT_SEC", 120.0)
 
     # Keep a long timeout so Ollama has enough time to load model weights.
-    oai_client = openai.AsyncOpenAI(
-        api_key="ollama",
-        base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
-        max_retries=0,
-        http_client=httpx.AsyncClient(
-            timeout=httpx.Timeout(llm_timeout_sec),
-            follow_redirects=True,
-        ),
-    )
+    # Add retry logic for LiveKit connection
+    livekit_retry_count = _env_int("LIVEKIT_RETRY_COUNT", 3)
+    livekit_retry_delay = _env_float("LIVEKIT_RETRY_DELAY", 2.0)
+
+    for attempt in range(livekit_retry_count):
+        try:
+            oai_client = openai.AsyncOpenAI(
+                api_key="ollama",
+                base_url=os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1"),
+                max_retries=0,
+                http_client=httpx.AsyncClient(
+                    timeout=httpx.Timeout(llm_timeout_sec),
+                    follow_redirects=True,
+                ),
+            )
+            break
+        except Exception as exc:
+            if attempt == livekit_retry_count - 1:
+                logger.error("Failed to connect to Ollama after %d attempts: %s", livekit_retry_count, exc)
+                raise
+            logger.warning("Ollama connection failed (attempt %d/%d), retrying in %.1fs: %s", attempt + 1, livekit_retry_count, livekit_retry_delay, exc)
+            await asyncio.sleep(livekit_retry_delay)
 
     # Pass the correctly formatted client to LiveKit
     llm = openai_plugin.LLM(
@@ -368,6 +381,8 @@ async def entrypoint(ctx: JobContext):
         model=settings["sttModel"],
         language=settings["language"],
         local_files_only=True,  # Force offline mode
+        cache_dir="/app/models/faster-whisper",  # Cache models locally
+        download_timeout=30,  # Timeout for model downloads
     )
     if warmup_enabled:
         asyncio.create_task(_warmup_ollama_model(oai_client, settings["model"]))
